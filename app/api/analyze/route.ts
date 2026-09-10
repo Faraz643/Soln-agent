@@ -39,7 +39,7 @@ async function callGemini(input: { title: string; content: string; source: strin
   const data = await res.json();
   const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
   if (!text) throw new Error('Gemini returned no analysis');
-  return JSON.parse(text);
+  return { data: JSON.parse(text), model };
 }
 
 export async function POST(request: NextRequest) {
@@ -68,7 +68,7 @@ export async function POST(request: NextRequest) {
       const meta = json(doc.metadata);
       const gh = source === 'github' ? await githubState(doc.url) : { isOpen: null, hasPr: false, isSolved: false, reason: null };
       const stale = !!doc.published_at && Date.now() - new Date(doc.published_at).getTime() > 180 * 86400000;
-      const ai = await callGemini({ title: doc.title || '', content: doc.content || '', source, metadata: meta });
+      const { data: ai, model } = await callGemini({ title: doc.title || '', content: doc.content || '', source, metadata: meta });
       const isOpen = source === 'github' && gh.isOpen !== null ? gh.isOpen : null;
       const isSolved = gh.isSolved || ai.is_solved === true;
       const hasPr = gh.hasPr || ai.has_pr === true;
@@ -77,7 +77,7 @@ export async function POST(request: NextRequest) {
       const hardReject = !ai.is_problem || isSolved || (stale && source === 'github') || confidence < 70 || opportunity < 60;
       const status = hardReject ? 'rejected' : (ai.is_paid || opportunity >= 75 ? 'verified' : 'candidate');
       const rejectionReason = hardReject ? (gh.reason || ai.rejection_reason || (stale ? 'Older than 180 days' : confidence < 70 ? 'Low confidence' : 'Does not meet strict opportunity threshold')) : null;
-      const row = { raw_document_id: doc.id, status, is_problem: !!ai.is_problem, is_paid: !!ai.is_paid, reward_amount: ai.reward_amount == null ? null : Number(ai.reward_amount), currency: ai.currency || null, is_open: isOpen, has_pr: hasPr, is_solved: isSolved, is_stale: stale, difficulty: ai.difficulty || null, technologies: Array.isArray(ai.technologies) ? ai.technologies.slice(0, 20) : [], problem_summary: ai.problem_summary || null, opportunity_summary: ai.opportunity_summary || null, opportunity_score: opportunity, confidence_score: confidence, rejection_reason: rejectionReason, evidence: { source, metadata: meta, github: gh, model_scores: { pain: clamp(ai.pain_score), demand: clamp(ai.demand_score), payment: clamp(ai.payment_score) } }, model: model, analyzed_at: new Date().toISOString(), updated_at: new Date().toISOString() };
+      const row = { raw_document_id: doc.id, status, is_problem: !!ai.is_problem, is_paid: !!ai.is_paid, reward_amount: ai.reward_amount == null ? null : Number(ai.reward_amount), currency: ai.currency || null, is_open: isOpen, has_pr: hasPr, is_solved: isSolved, is_stale: stale, difficulty: ai.difficulty || null, technologies: Array.isArray(ai.technologies) ? ai.technologies.slice(0, 20) : [], problem_summary: ai.problem_summary || null, opportunity_summary: ai.opportunity_summary || null, opportunity_score: opportunity, confidence_score: confidence, rejection_reason: rejectionReason, evidence: { source, metadata: meta, github: gh, model_scores: { pain: clamp(ai.pain_score), demand: clamp(ai.demand_score), payment: clamp(ai.payment_score) } }, model, analyzed_at: new Date().toISOString(), updated_at: new Date().toISOString() };
       const { data: saved, error: saveError } = await db.from('document_analyses').upsert(row, { onConflict: 'raw_document_id' }).select().single();
       if (saveError) throw saveError;
       results.push(saved);
