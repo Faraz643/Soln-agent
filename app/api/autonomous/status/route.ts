@@ -26,8 +26,7 @@ export async function GET(request: NextRequest) {
   if (runs.error) return NextResponse.json({ error: runs.error.message }, { status: 500 });
   if (opps.error) return NextResponse.json({ error: opps.error.message }, { status: 500 });
   const ids = (opps.data || []).map((o: any) => o.id);
-  const competitorCounts: Record<string, number> = {};
-  const validationCounts: Record<string, number> = {};
+  const competitorCounts: Record<string, number> = {}; const validationCounts: Record<string, number> = {};
   if (ids.length) {
     const [competitors, validations] = await Promise.all([
       c.from('competitors').select('opportunity_id').in('opportunity_id', ids),
@@ -36,6 +35,9 @@ export async function GET(request: NextRequest) {
     for (const row of competitors.data || []) competitorCounts[row.opportunity_id] = (competitorCounts[row.opportunity_id] || 0) + 1;
     for (const row of validations.data || []) validationCounts[row.opportunity_id] = (validationCounts[row.opportunity_id] || 0) + 1;
   }
-  const opportunities = (opps.data || []).map((o: any) => ({ ...o, problem: o.problems || null, problems: undefined, competitor_count: competitorCounts[o.id] || 0, validation_count: validationCounts[o.id] || 0 }));
+  const opportunities = (opps.data || []).map((o: any) => {
+    const problem = Array.isArray(o.problems) ? o.problems[0] || null : o.problems || null;
+    return { id: o.id, name: o.name, description: o.description, score: o.score, problem_id: o.problem_id, problem, competitor_count: competitorCounts[o.id] || 0, validation_count: validationCounts[o.id] || 0 };
+  });
   return NextResponse.json({ ok: true, runs: runs.data || [], topics: topics.data || [], opportunities, sources: { reddit: true, web: true, github: true, x: !!process.env.X_BEARER_TOKEN } });
 }
