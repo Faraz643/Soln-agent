@@ -1,27 +1,28 @@
 import Link from 'next/link';
 import { AppShell, Score } from '@/components/app-shell';
 import { DiscoveryForm } from '@/components/discovery-form';
+import { AutonomousDashboard } from '@/components/autonomous-dashboard-v2';
 import { getOverview } from '@/lib/intelligence-data';
+import { getAutonomousOverview } from '@/lib/autonomous-data';
 
 export default async function Home() {
-  const { analyses, documents, sources, opportunities, problems, highDemand, avgDemand } = await getOverview();
+  const [{ analyses, documents, sources, opportunities, problems, highDemand, avgDemand }, autonomous] = await Promise.all([getOverview(), getAutonomousOverview()]);
   const top = analyses.filter(a => a.is_problem).slice(0, 5);
   const activeSources = sources.filter((s: any) => s.enabled).length;
   return <AppShell active="Overview"><div className="content">
-    <div className="eyebrow">Product Demand Intelligence</div><h1>Find problems worth building for.</h1>
-    <p className="lead">Give Soln-Agent a market, customer, technology or topic. It collects public demand signals, detects recurring problems, measures demand and identifies product opportunities.</p>
-    <DiscoveryForm />
+    <div className="eyebrow">Product Demand Intelligence</div><h1>Discover what people need before you decide what to build.</h1>
+    <p className="lead">Soln-Agent continuously searches public conversations, detects recurring problems, measures demand, researches competition and ranks product opportunities. You do not need to choose the market first.</p>
+    <AutonomousDashboard initialRuns={autonomous.runs as any} initialTopics={autonomous.topics as any} />
     <div className="grid section">
-      <div className="card"><div className="muted">Signals collected</div><div className="metric">{documents.length}</div><div className="muted">Raw demand signals</div></div>
+      <div className="card"><div className="muted">Signals collected</div><div className="metric">{documents.length}</div><div className="muted">Raw demand evidence</div></div>
       <div className="card"><div className="muted">Problems detected</div><div className="metric">{problems}</div><div className="muted">Concrete problem signals</div></div>
       <div className="card"><div className="muted">High-potential opportunities</div><div className="metric">{opportunities}</div><div className="muted">Opportunity score ≥ 75</div></div>
-      <div className="card"><div className="muted">Average demand</div><div className="metric">{avgDemand}<span className="small">/100</span></div><div className="muted">Across analyzed signals</div></div>
+      <div className="card"><div className="muted">Average demand</div><div className="metric">{avgDemand}<span className="small">/100</span></div><div className="muted">Across analyzed evidence</div></div>
     </div>
     <div className="section two-col">
-      <div className="card"><div className="section-head"><h2>Top product signals</h2><Link className="link" href="/opportunities">View all →</Link></div>
-        {top.length ? top.map(a => <div className="trend" key={a.id}><div><div className="title-cell">{a.problem_summary}</div><div className="small">{a.customer_segments?.join(' · ') || 'Customer segment not yet clear'}</div></div><Score value={a.opportunity_score} label="Opportunity"/></div>) : <div className="empty">No analyzed signals yet. Start a discovery run above.</div>}
-      </div>
+      <div className="card"><div className="section-head"><h2>Top opportunities</h2><Link className="link" href="/opportunities">View all →</Link></div>{top.length ? top.map(a => <div className="trend" key={a.id}><div><div className="title-cell">{a.problem_summary}</div><div className="small">{a.customer_segments?.join(' · ') || 'Customer segment not yet clear'}</div></div><Score value={a.opportunity_score} label="Opportunity"/></div>) : <div className="empty">The agent has not found a verified opportunity yet. Run an autonomous cycle or wait for the scheduled collector.</div>}</div>
       <div className="card"><h2>Signal health</h2><div className="stat-grid"><div className="stat"><div className="small">Sources</div><strong>{sources.length}</strong></div><div className="stat"><div className="small">Enabled</div><strong>{activeSources}</strong></div><div className="stat"><div className="small">High demand</div><strong>{highDemand}</strong></div></div></div>
     </div>
+    <div className="section"><DiscoveryForm /></div>
   </div></AppShell>;
 }
