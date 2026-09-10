@@ -1,62 +1,26 @@
 import Link from 'next/link';
+import { AppShell, Score } from '@/components/app-shell';
+import { getOverview } from '@/lib/intelligence-data';
 
-const stats = [
-  ['Data sources', '0', 'Connect in Phase 2'],
-  ['Problems found', '0', 'AI pipeline not connected yet'],
-  ['Opportunities', '0', 'No analysis data yet'],
-  ['Pipeline', 'Ready', 'Foundation complete'],
-];
-
-export default function Home() {
-  return (
-    <div className="shell">
-      <aside className="sidebar">
-        <div className="brand">Soln Agent</div>
-        <nav className="nav">
-          <Link className="active" href="/">Overview</Link>
-          <Link href="/opportunities">Opportunities</Link>
-          <Link href="/problems">Problems</Link>
-          <Link href="/trends">Trends</Link>
-          <Link href="/sources">Sources</Link>
-          <Link href="/settings">Settings</Link>
-        </nav>
-      </aside>
-
-      <main className="main">
-        <header className="header">
-          <strong>Product Demand Intelligence</strong>
-          <span className="badge">Phase 1 · Foundation</span>
-        </header>
-
-        <section className="content">
-          <div className="eyebrow">Soln Agent</div>
-          <h1>Find problems worth building for.</h1>
-          <p className="lead">
-            The workspace for turning public demand signals into evidence-backed product opportunities.
-            Phase 1 establishes the application, database integration points, authentication structure, and automation boundary.
-          </p>
-
-          <div className="grid">
-            {stats.map(([label, value, note]) => (
-              <div className="card" key={label}>
-                <div className="muted">{label}</div>
-                <div className="metric">{value}</div>
-                <div className="muted">{note}</div>
-              </div>
-            ))}
-          </div>
-
-          <div className="section">
-            <div className="card status">
-              <div>
-                <h2>System status</h2>
-                <div className="muted"><span className="status-dot" />Application foundation is ready for source ingestion.</div>
-              </div>
-              <span className="badge">Next: Data Collection</span>
-            </div>
-          </div>
-        </section>
-      </main>
+export default async function Home() {
+  const { analyses, documents, sources, opportunities, problems, highDemand, avgDemand } = await getOverview();
+  const top = analyses.filter(a => a.is_problem).slice(0, 5);
+  const activeSources = sources.filter((s: any) => s.enabled).length;
+  return <AppShell active="Overview"><div className="content">
+    <div className="eyebrow">Signal → evidence → opportunity</div>
+    <h1>Find problems worth building for.</h1>
+    <p className="lead">Soln-Agent turns public demand signals into evidence-backed product intelligence. Payment is one signal of demand—not a bounty requirement.</p>
+    <div className="grid">
+      <div className="card"><div className="muted">Signals collected</div><div className="metric">{documents.length}</div><div className="muted">Raw demand signals</div></div>
+      <div className="card"><div className="muted">Problems detected</div><div className="metric">{problems}</div><div className="muted">Concrete problem signals</div></div>
+      <div className="card"><div className="muted">High-potential opportunities</div><div className="metric">{opportunities}</div><div className="muted">Opportunity score ≥ 75</div></div>
+      <div className="card"><div className="muted">Average demand</div><div className="metric">{avgDemand}<span className="small">/100</span></div><div className="muted">Across analyzed signals</div></div>
     </div>
-  );
+    <div className="section two-col">
+      <div className="card"><div className="section-head"><h2>Top product signals</h2><Link className="link" href="/opportunities">View all →</Link></div>
+        {top.length ? top.map(a => <div className="trend" key={a.id}><div><div className="title-cell">{a.problem_summary}</div><div className="small">{a.customer_segments?.join(' · ') || 'Customer segment not yet clear'}</div></div><Score value={a.opportunity_score} label="Opportunity"/></div>) : <div className="empty">No analyzed signals yet. Run the ingestion workflow to populate intelligence.</div>}
+      </div>
+      <div className="card"><h2>Signal health</h2><div className="stat-grid"><div className="stat"><div className="small">Sources</div><strong>{sources.length}</strong></div><div className="stat"><div className="small">Enabled</div><strong>{activeSources}</strong></div><div className="stat"><div className="small">High demand</div><strong>{highDemand}</strong></div></div><div className="section"><div className="muted">Current model</div><div style={{marginTop:6,fontWeight:700}}>{analyses[0]?.evidence ? String((analyses[0].evidence as any).source || 'Gemini') : 'Gemini-powered'}</div></div></div>
+    </div>
+  </div></AppShell>;
 }
