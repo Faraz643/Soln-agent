@@ -45,11 +45,7 @@ export function normalizeDemandAnalysis(raw: Partial<DemandAnalysis>, source: st
   const competition = clamp(a.competition_score);
   const workaround = clamp(a.workaround_score);
   const relevance = clamp(a.topic_relevance_score);
-
-  // Opportunity is deliberately demand-led. Payment is one signal, not a bounty gate.
   const opportunity = clamp(a.opportunity_score ?? (pain * 0.25 + demand * 0.30 + payment * 0.15 + evidence * 0.10 + urgency * 0.10 + workaround * 0.10 - competition * 0.10));
-  const confidence = clamp(a.confidence_score);
-
   return {
     topic_relevance_score: relevance,
     topic_relevance_reason: String(a.topic_relevance_reason || ''),
@@ -65,7 +61,7 @@ export function normalizeDemandAnalysis(raw: Partial<DemandAnalysis>, source: st
     payment_score: payment,
     pain_score: pain,
     opportunity_score: opportunity,
-    confidence_score: confidence,
+    confidence_score: clamp(a.confidence_score),
     rejection_reason: a.rejection_reason || null,
     is_solved: Boolean(a.is_solved),
     has_pr: Boolean(a.has_pr),
@@ -78,7 +74,7 @@ export function normalizeDemandAnalysis(raw: Partial<DemandAnalysis>, source: st
   };
 }
 
-export const DEMAND_SYSTEM_PROMPT = `You are Soln-Agent, a Product Demand Intelligence engine. This is NOT a bounty hunter and NOT a code-task classifier.
+export const DEMAND_SYSTEM_PROMPT = String.raw`You are Soln-Agent, a Product Demand Intelligence engine. This is NOT a bounty hunter and NOT a code-task classifier.
 
 The user gives you a RESEARCH TOPIC. Every document must first pass a strict topic-relevance gate. A document can only become a demand signal if its actual content is materially about the research topic. Do not infer relevance merely because a few generic words overlap.
 
@@ -87,7 +83,7 @@ Analyze in this order:
 2. Problem reality: Is there a concrete problem, need, job-to-be-done, or recurring frustration within the research topic?
 3. Pain: severity, frequency, consequences, and cost of the current problem.
 4. Demand: strength and specificity of people asking for, complaining about, or seeking a solution. Repeated independent evidence is stronger.
-5. Willingness to pay: explicit or indirect evidence that users/businesses spend money, request paid solutions, have budgets, or pay for workarounds. Absence of payment evidence does NOT make a problem invalid.
+5. Willingness to pay: explicit or indirect evidence that users/businesses spend money, request paid solutions, have budgets, pay for workarounds, or already buy alternatives. Absence of payment evidence does NOT make a problem invalid.
 6. Workarounds: manual processes, hacks, spreadsheets, scripts, existing tools, or other ways users cope.
 7. Urgency: whether the problem is actively blocking work or causing immediate pain.
 8. Competition: quality and saturation of existing alternatives. High competition reduces opportunity but does not erase demand.
@@ -102,7 +98,7 @@ IMPORTANT RULES:
 - reward_amount should only be populated when an explicit monetary amount is actually present.
 - A feature request can be a valid demand signal if it represents a meaningful customer problem.
 - Reject unrelated content, keyword-only matches, spam, announcements, tutorials without a problem, academic assignments, informational articles without a user need, and purely technical noise with no user need.
-- For a source such as GitHub, repository/issue context must itself be relevant to the research topic. Do not treat GitHub as a generic problem database.
+- For GitHub, repository/issue context must itself be relevant to the research topic. Do not treat GitHub as a generic problem database.
 - If the research topic is about a consumer/customer group, a random software repository with one overlapping word is NOT relevant.
 - Separate observed evidence from inference.
 - Score each dimension from 0-100.
