@@ -1,17 +1,6 @@
 'use client';
-
 import { useEffect, useState } from 'react';
+import { AppShell } from '@/components/app-shell';
 
-type Source = { name: string; type: string; enabled: boolean; last_collected_at: string | null; last_error: string | null; documents_collected: number };
-
-export default function SourcesPage() {
-  const [sources, setSources] = useState<Source[]>([]);
-  const [documents, setDocuments] = useState(0);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    fetch('/api/ingest/status').then(r => r.json()).then(data => { setSources(data.sources ?? []); setDocuments(data.documents ?? 0); }).finally(() => setLoading(false));
-  }, []);
-
-  return <div className="content"><div className="eyebrow">Data Collection</div><h1>Sources</h1><p className="lead">Live ingestion status for the Phase 2 collectors.</p><div className="grid">{sources.map(s => <div className="card" key={s.name}><h2>{s.name}</h2><div className="muted">{s.type}</div><div style={{marginTop:16}} className="badge">{s.enabled ? 'Connected' : 'Not connected'}</div><div style={{marginTop:12}} className="muted">{s.documents_collected.toLocaleString()} documents</div><div className="muted">{s.last_collected_at ? `Last collected ${new Date(s.last_collected_at).toLocaleString()}` : 'Waiting for first run'}</div>{s.last_error && <div style={{marginTop:10}} className="muted">Error: {s.last_error}</div>}</div>)}{!loading && sources.length === 0 && <div className="card"><h2>No sources yet</h2><div className="muted">Apply the Supabase Phase 2 migration, then run the n8n workflow.</div></div>}</div><div className="section"><div className="card status"><div><h2>Total collected</h2><div className="metric">{documents.toLocaleString()}</div></div><span className="badge">Phase 2</span></div></div></div>;
-}
+type Source={name:string;type:string;enabled:boolean;last_collected_at:string|null;last_error:string|null;documents_collected:number};
+export default function SourcesPage(){const [sources,setSources]=useState<Source[]>([]);const [documents,setDocuments]=useState(0);const [loading,setLoading]=useState(true);useEffect(()=>{fetch('/api/ingest/status').then(r=>r.json()).then(d=>{setSources(d.sources??[]);setDocuments(d.documents??0)}).finally(()=>setLoading(false))},[]);return <AppShell active="Sources"><div className="content"><div className="eyebrow">Signal collection</div><h1>Sources</h1><p className="lead">Manage and inspect the feeds that supply Soln-Agent with real-world demand signals.</p><div className="grid">{sources.map(s=><div className="card" key={s.name}><div className="section-head"><h2>{s.name}</h2><span className={`pill ${s.enabled?'good':'warn'}`}>{s.enabled?'Connected':'Not connected'}</span></div><div className="muted">{s.type}</div><div className="metric">{s.documents_collected.toLocaleString()}</div><div className="muted">signals collected</div><div className="section"><div className="small">{s.last_collected_at?`Last collected ${new Date(s.last_collected_at).toLocaleString()}`:'Waiting for first collection'}</div>{s.last_error&&<div className="error" style={{marginTop:10}}>{s.last_error}</div>}</div></div>)}{!loading&&!sources.length&&<div className="card empty">No sources configured yet.</div>}</div><div className="section"><div className="card status"><div><div className="muted">Total raw signals</div><div className="metric">{documents.toLocaleString()}</div></div><span className="badge">Collection layer</span></div></div></div></AppShell>}
