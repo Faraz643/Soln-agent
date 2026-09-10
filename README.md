@@ -11,13 +11,13 @@ Discovery engine
         ↓
 Reddit + GitHub + Web search
         ↓
-raw_documents
+research run → run-specific raw signals
         ↓
 Gemini signal analysis
         ↓
 document_analyses
         ↓
-Problem clustering
+Problem clustering for that research run
         ↓
 problems + evidence + trend_snapshots
         ↓
@@ -38,10 +38,10 @@ MVP specification agent
 
 ## APIs
 
-- `POST /api/discover` — collect Reddit, GitHub and public web signals for a topic.
+- `POST /api/discover` — collect Reddit, GitHub and public web signals for a topic and attach every signal to a unique research run.
 - `POST /api/ingest` — persist normalized raw signals (used by n8n and integrations).
-- `POST /api/analyze` — analyze pending/raw signals with Gemini.
-- `POST /api/cluster` — consolidate signals into recurring problems and opportunities and create evidence/trend snapshots.
+- `POST /api/analyze` — analyze signals for a supplied `run_id`; if no run is supplied, it safely analyzes the latest research run rather than an unrelated global backlog.
+- `POST /api/cluster` — consolidate only the selected research run into recurring problems and opportunities and create evidence/trend snapshots.
 - `POST /api/competition` — research public competitor/alternative results for an opportunity.
 - `POST /api/validate` — generate a product concept, landing-page draft, pricing hypothesis and validation experiment.
 - `POST /api/mvp` — generate a grounded MVP specification and engineering plan.
@@ -63,19 +63,23 @@ Never commit real secrets.
 
 ## Supabase migrations
 
-Apply in order:
+Apply in this order:
 
 1. `supabase/migrations/0001_phase1.sql`
 2. `supabase/migrations/0002_phase2_ingestion.sql`
 3. `supabase/migrations/0003_phase3_analysis.sql`
-4. `supabase/migrations/202609100001_product_demand_intelligence.sql`
-5. `supabase/migrations/0004_intelligence_platform.sql`
+4. `supabase/migrations/0004_intelligence_platform.sql`
+5. `supabase/migrations/202609100001_product_demand_intelligence.sql`
+6. `supabase/migrations/202609100002_research_run_scoping.sql`
+
+**Important:** `202609100002_research_run_scoping.sql` is required before using the new run-scoped discovery/analyze/cluster flow. It creates the `discovery_run_documents` relationship that prevents one research query from accidentally analyzing or displaying another query's signals.
 
 ## n8n
 
 - `n8n/soln-agent-phase2.json` — legacy GitHub collection workflow.
-- `n8n/soln-agent-phase3.json` — legacy analysis workflow.
+- `n8n/soln-agent-phase3.json` — scheduled analysis workflow; it now analyzes the latest research run when no run ID is supplied.
 - `n8n/soln-agent-autonomous.json` — topic-driven Reddit + GitHub + web discovery followed by analysis and clustering every 6 hours.
+- `n8n/soln-agent-phase9.json` — autonomous multi-topic pipeline; each topic now carries its own `run_id` through analysis and clustering so topics cannot contaminate one another.
 
 Replace `REPLACE_WITH_INGEST_SECRET` in imported workflows with the same secret stored in Vercel. Keep the autonomous workflow inactive until its topics and credentials are reviewed.
 
