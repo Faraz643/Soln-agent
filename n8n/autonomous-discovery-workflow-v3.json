@@ -1,0 +1,9 @@
+{
+  "name":"Soln-Agent Autonomous Product Discovery v3",
+  "nodes":[
+    {"parameters":{"rule":{"interval":[{"field":"hours","hoursInterval":6}]}},"id":"soln-cron-v3","name":"Every 6 Hours","type":"n8n-nodes-base.scheduleTrigger","typeVersion":1.2,"position":[260,300]},
+    {"parameters":{"method":"POST","url":"={{$env.SOLN_AGENT_URL + '/api/autonomous/cycle-v3'}}","sendHeaders":true,"headerParameters":{"parameters":[{"name":"Authorization","value":"={{'Bearer ' + $env.SOLN_AGENT_INGEST_SECRET}}"}]},"options":{"timeout":180000}},"id":"soln-cycle-v3","name":"Discover Analyze Enrich","type":"n8n-nodes-base.httpRequest","typeVersion":4.2,"position":[540,300]}
+  ],
+  "connections":{"Every 6 Hours":{"main":[[{"node":"Discover Analyze Enrich","type":"main","index":0}]]}},
+  "active":false,"settings":{},"versionId":"soln-agent-autonomous-v3"
+}
