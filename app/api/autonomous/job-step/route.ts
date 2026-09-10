@@ -25,7 +25,11 @@ export async function POST(request: NextRequest) {
   const { data: current, error: loadError } = await c.from('agent_runs').select('*').eq('id', id).single();
   if (loadError || !current) return NextResponse.json({ error: loadError?.message || 'Agent run not found' }, { status: 404 });
   if (current.status === 'completed' || current.status === 'error') return NextResponse.json({ ok: current.status === 'completed', done: true, phase: meta(current.metadata).phase || current.status, run: current });
-  if (current.status === 'processing') return NextResponse.json({ ok: true, busy: true, done: false, phase: meta(current.metadata).phase || 'working' });
+  if (current.status === 'processing') {
+    const age = Date.now() - new Date(current.updated_at || current.started_at).getTime();
+    if (age < 120000) return NextResponse.json({ ok: true, busy: true, done: false, phase: meta(current.metadata).phase || 'working' });
+    await c.from('agent_runs').update({ status: 'running' }).eq('id', id).eq('status', 'processing');
+  }
 
   const claimed = await c.from('agent_runs').update({ status: 'processing' }).eq('id', id).eq('status', 'running').select('id').maybeSingle();
   if (!claimed.data) return NextResponse.json({ ok: true, busy: true, done: false });
@@ -35,6 +39,7 @@ export async function POST(request: NextRequest) {
     const topic = String(current.topic || '');
     const masterId = String(m.master_discovery_run_id || '');
     const sources: string[] = Array.isArray(m.sources) ? m.sources : ['reddit', 'web', 'github'];
+    const analysisCap = Math.min(Math.max(Number(m.analysis_cap || 24), 6), 40);
 
     if (m.phase === 'discover') {
       const index = Number(m.source_index || 0);
@@ -69,6 +74,10 @@ export async function POST(request: NextRequest) {
       const { data: doneRows, error: doneError } = await c.from('document_analyses').select('raw_document_id').in('raw_document_id', ids);
       if (doneError) throw doneError;
       const doneSet = new Set((doneRows || []).map((x: any) => x.raw_document_id));
+      if (doneSet.size >= analysisCap) {
+        await c.from('agent_runs').update({ status: 'running', metadata: { ...m, phase: 'cluster' } }).eq('id', id);
+        return NextResponse.json({ ok: true, done: false, phase: 'cluster', message: `Analysis cap of ${analysisCap} evidence items reached.` });
+      }
       const pending = ids.filter((x: string) => !doneSet.has(x)).slice(0, 2);
       if (pending.length) {
         const result = await internalPost(request, '/api/analyze', { raw_document_ids: pending });
