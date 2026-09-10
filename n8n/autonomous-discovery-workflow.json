@@ -1,0 +1,31 @@
+{
+  "name": "Soln-Agent Autonomous Product Discovery",
+  "nodes": [
+    {
+      "parameters": {"rule": {"interval": [{"field": "hours", "hoursInterval": 6}]}},
+      "id": "soln-cron",
+      "name": "Every 6 Hours",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [260, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{$env.SOLN_AGENT_URL + '/api/autonomous/cycle'}}",
+        "sendHeaders": true,
+        "headerParameters": {"parameters": [{"name": "Authorization", "value": "={{'Bearer ' + $env.SOLN_AGENT_INGEST_SECRET}}"}]},
+        "options": {"timeout": 120000}
+      },
+      "id": "soln-cycle",
+      "name": "Run Autonomous Discovery",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [520, 300]
+    }
+  ],
+  "connections": {"Every 6 Hours": {"main": [[{"node": "Run Autonomous Discovery", "type": "main", "index": 0}]]}},
+  "active": false,
+  "settings": {},
+  "versionId": "soln-agent-autonomous-v1"
+}
