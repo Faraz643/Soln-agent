@@ -37,11 +37,7 @@ async function callGemini(input: { title: string; content: string; source: strin
   const payload = JSON.stringify(input).slice(0, 30000);
   const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(key)}`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      system_instruction: { parts: [{ text: DEMAND_SYSTEM_PROMPT }] },
-      contents: [{ role: 'user', parts: [{ text: payload }] }],
-      generationConfig: { temperature: 0, responseMimeType: 'application/json' },
-    }),
+    body: JSON.stringify({ system_instruction: { parts: [{ text: DEMAND_SYSTEM_PROMPT }] }, contents: [{ role: 'user', parts: [{ text: payload }] }], generationConfig: { temperature: 0, responseMimeType: 'application/json' } }),
   });
   if (!res.ok) {
     const detail = await res.text().catch(() => '');
@@ -103,11 +99,19 @@ export async function POST(request: NextRequest) {
   if (!expected || request.headers.get('authorization') !== `Bearer ${expected}`) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   const body = await request.json().catch(() => null);
   const ids: string[] = Array.isArray(body?.raw_document_ids) ? body.raw_document_ids : [];
-  const runId = typeof body?.run_id === 'string' ? body.run_id : null;
+  const requestedRunId = typeof body?.run_id === 'string' ? body.run_id : null;
   const limit = Math.min(Math.max(Number(body?.limit) || 25, 1), 50);
-  if (!ids.length && !runId && !body?.allow_global) return NextResponse.json({ error: 'run_id or raw_document_ids is required; global analysis must explicitly set allow_global=true' }, { status: 400 });
-
   const c = db();
+
+  // Never silently analyze an unrelated global backlog. If a caller does not
+  // provide a run or document IDs, use the latest research run.
+  let runId = requestedRunId;
+  if (!runId && !ids.length) {
+    const latest = await c.from('discovery_runs').select('id').order('started_at', { ascending: false }).limit(1).maybeSingle();
+    if (latest.error || !latest.data) return NextResponse.json({ error: 'No research run exists yet' }, { status: 404 });
+    runId = latest.data.id;
+  }
+
   let docs: any[] | null = null;
   let error: any = null;
   let query: string | null = null;
@@ -116,16 +120,14 @@ export async function POST(request: NextRequest) {
     const run = await c.from('discovery_runs').select('id,query').eq('id', runId).single();
     if (run.error || !run.data) return NextResponse.json({ error: run.error?.message || 'Research run not found' }, { status: 404 });
     query = run.data.query;
-    ({ data: docs, error } = await c.from('discovery_run_documents')
+    const linkRes = await c.from('discovery_run_documents')
       .select('raw_document_id,raw_documents(id,external_id,url,title,content,published_at,metadata,sources(type,name))')
-      .eq('discovery_run_id', runId)
-      .limit(limit));
-    docs = (docs || []).map((x: any) => x.raw_documents).filter(Boolean);
-  } else if (ids.length) {
+      .eq('discovery_run_id', runId).limit(limit);
+    if (linkRes.error) return NextResponse.json({ error: linkRes.error.message }, { status: 500 });
+    docs = (linkRes.data || []).map((x: any) => x.raw_documents).filter(Boolean);
+  } else {
     if (ids.length > 50) return NextResponse.json({ error: 'raw_document_ids must contain at most 50 ids' }, { status: 400 });
     ({ data: docs, error } = await c.from('raw_documents').select('id,external_id,url,title,content,published_at,metadata,sources(type,name)').in('id', ids));
-  } else {
-    ({ data: docs, error } = await c.from('raw_documents').select('id,external_id,url,title,content,published_at,metadata,sources(type,name)').order('collected_at', { ascending: false }).limit(limit));
   }
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
