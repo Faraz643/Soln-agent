@@ -16,7 +16,7 @@ export async function POST(request: NextRequest) {
   if (!topic?.topic) return NextResponse.json({ error: 'No research topic available' }, { status: 503 });
 
   const sources = ['reddit', 'web', 'github', ...(process.env.X_BEARER_TOKEN ? ['x'] : [])];
-  const metadata = { version: 5, autonomous: true, phase: 'discover', source_index: 0, sources, topic_id: topic.id, analyzed_count: 0, analysis_cap: 24, clustered: false, enriched: [] };
+  const metadata = { version: 5, autonomous: true, phase: 'discover', source_index: 0, sources, topic_id: topic.id, analyzed_count: 0, analysis_cap: 12, clustered: false, enriched: [] };
   const { data: run, error } = await c.from('agent_runs').insert({ kind: 'discovery_cycle', status: 'running', topic: topic.topic, metadata }).select('id').single();
   if (error || !run) return NextResponse.json({ error: error?.message || 'Could not create agent run' }, { status: 500 });
 
