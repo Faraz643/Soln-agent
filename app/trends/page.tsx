@@ -1,3 +1,11 @@
-export default function TrendsPage() {
-  return <div className="content"><div className="eyebrow">Workspace</div><h1>Trends</h1><p className="lead">Trend detection is reserved for the demand-intelligence pipeline in later phases.</p></div>;
+import { AppShell } from '@/components/app-shell';
+import { getAnalyses } from '@/lib/intelligence-data';
+
+export default async function TrendsPage() {
+  const rows = await getAnalyses(200);
+  const tech = new Map<string, number>(); const segments = new Map<string, number>();
+  for (const a of rows) { for (const t of a.technologies || []) tech.set(t, (tech.get(t)||0)+1); for (const s of a.customer_segments || []) segments.set(s,(segments.get(s)||0)+1); }
+  const topTech = [...tech.entries()].sort((a,b)=>b[1]-a[1]).slice(0,10); const topSegments=[...segments.entries()].sort((a,b)=>b[1]-a[1]).slice(0,10);
+  const recent = rows.filter(a=>a.analyzed_at).slice(0,12); const avg = recent.length ? Math.round(recent.reduce((s,a)=>s+Number(a.demand_score||0),0)/recent.length) : 0;
+  return <AppShell active="Trends"><div className="content"><div className="eyebrow">Market movement</div><h1>Where demand is concentrating.</h1><p className="lead">Trends are calculated from the signals currently stored in Soln-Agent. As more sources arrive, these views become stronger.</p><div className="grid"><div className="card"><div className="muted">Current average demand</div><div className="metric">{avg}</div><div className="muted">Latest analyzed signals</div></div><div className="card"><div className="muted">Technology signals</div><div className="metric">{tech.size}</div><div className="muted">Distinct technologies</div></div><div className="card"><div className="muted">Customer segments</div><div className="metric">{segments.size}</div><div className="muted">Identified segments</div></div><div className="card"><div className="muted">Analyzed signals</div><div className="metric">{rows.length}</div><div className="muted">Current dataset</div></div></div><div className="section two-col"><div className="card"><h2>Technology concentration</h2>{topTech.length?topTech.map(([name,n])=><div className="trend" key={name}><span>{name}</span><strong>{n} signals</strong></div>):<div className="empty">Not enough data yet.</div>}</div><div className="card"><h2>Customer demand</h2>{topSegments.length?topSegments.map(([name,n])=><div className="trend" key={name}><span>{name}</span><strong>{n}</strong></div>):<div className="empty">Not enough data yet.</div>}</div></div></div></AppShell>;
 }
