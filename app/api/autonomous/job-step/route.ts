@@ -40,7 +40,7 @@ export async function POST(request: NextRequest) {
     const topic = String(current.topic || '');
     const masterId = String(m.master_discovery_run_id || '');
     const sources: string[] = Array.isArray(m.sources) ? m.sources : ['reddit', 'web', 'github'];
-    const analysisCap = Math.min(Math.max(Number(m.analysis_cap || 20), 8), 30);
+    const analysisCap = Math.min(Math.max(Number(m.analysis_cap || 24), 8), 40);
 
     if (m.phase === 'discover') {
       const index = Number(m.source_index || 0);
@@ -71,16 +71,24 @@ export async function POST(request: NextRequest) {
       if (linkError) throw linkError;
       const ids = [...new Set((links || []).map((x: any) => x.raw_document_id).filter(Boolean))];
       if (!ids.length) throw new Error('No evidence was collected from enabled sources');
-      const { data: doneRows, error: doneError } = await c.from('document_analyses').select('raw_document_id').in('raw_document_id', ids);
+
+      // Only successful terminal analyses count as done. Transient/error rows are
+      // deliberately retried so one provider timeout cannot permanently poison a run.
+      const { data: doneRows, error: doneError } = await c.from('document_analyses').select('raw_document_id,status').in('raw_document_id', ids).in('status', ['rejected', 'candidate', 'verified']);
       if (doneError) throw doneError;
       const doneSet = new Set((doneRows || []).map((x: any) => x.raw_document_id));
       if (doneSet.size >= analysisCap) {
         await c.from('agent_runs').update({ status: 'running', metadata: { ...m, phase: 'cluster' } }).eq('id', id);
         return NextResponse.json({ ok: true, done: false, phase: 'cluster', message: `Analysis cap of ${analysisCap} evidence items reached.` });
       }
-      const pending = ids.filter((x: string) => !doneSet.has(x)).slice(0, 1);
+
+      // Analyze a small batch per request. The analysis endpoint itself has bounded
+      // concurrency, so this keeps every Vercel invocation comfortably below its timeout
+      // while reducing a single-click run from dozens of sequential requests to a handful.
+      const batchSize = Math.min(4, analysisCap - doneSet.size);
+      const pending = ids.filter((x: string) => !doneSet.has(x)).slice(0, batchSize);
       if (pending.length) {
-        const result = await internalPost(request, '/api/analyze', { raw_document_ids: pending });
+        const result = await internalPost(request, '/api/analyze', { raw_document_ids: pending, limit: pending.length });
         const analyzedCount = Number(current.signals_analyzed || 0) + Number(result.analyzed || pending.length);
         await c.from('agent_runs').update({ status: 'running', signals_analyzed: analyzedCount, metadata: { ...m, analyzed_count: analyzedCount } }).eq('id', id);
         return NextResponse.json({ ok: true, done: false, phase: 'analyze', analyzed: result.analyzed || pending.length, analyzed_count: analyzedCount, remaining_estimate: Math.max(0, ids.length - doneSet.size - pending.length) });
