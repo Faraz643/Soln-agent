@@ -1,3 +1,157 @@
-'use client';import{useEffect,useState}from'react';
-type Run={id:string;status:string;topic:string|null;signals_analyzed:number;problems_found:number;opportunities_found:number;started_at:string};type Topic={id:string;topic:string;priority:number;times_researched:number;last_researched_at?:string|null};
-export function AutonomousDashboard({initialRuns,initialTopics}:{initialRuns:Run[];initialTopics:Topic[]}){const[runs,setRuns]=useState(initialRuns),[topics,setTopics]=useState(initialTopics),[busy,setBusy]=useState(false),[msg,setMsg]=useState('');async function refresh(){const r=await fetch('/api/autonomous/status',{cache:'no-store'});if(r.ok){const j=await r.json();setRuns(j.runs||[]);setTopics(j.topics||[])}}useEffect(()=>{const i=setInterval(refresh,30000);return()=>clearInterval(i)},[]);async function run(){setBusy(true);setMsg('Agent is discovering new research topics, collecting evidence and building opportunities…');try{const r=await fetch('/api/autonomous/run-now-v3',{method:'POST'}),j=await r.json();if(!r.ok)throw new Error(j.error||'Discovery failed');setMsg('Autonomous discovery cycle completed.');await refresh()}catch(e:any){setMsg(e?.message||'Autonomous discovery failed')}finally{setBusy(false)}}const a=runs.reduce((n,r)=>n+Number(r.signals_analyzed||0),0),p=runs.reduce((n,r)=>n+Number(r.problems_found||0),0),o=runs.reduce((n,r)=>n+Number(r.opportunities_found||0),0);return <div className="section"><div className="card"><div className="section-head"><div><div className="eyebrow">Autonomous product discovery</div><h2 style={{margin:0}}>Find what people need — without choosing the topic first.</h2></div><button onClick={run} disabled={busy}>{busy?'Discovering…':'Run discovery now'}</button></div><p className="lead" style={{fontSize:15}}>The agent generates new research areas, searches Reddit, X, the web and GitHub, detects recurring customer problems, measures demand, checks competition and prepares MVP/validation work for strong opportunities.</p>{msg&&<div className="note">{msg}</div>}<div className="stat-grid" style={{marginTop:16}}><div className="stat"><div className="small">Signals analyzed</div><strong>{a}</strong></div><div className="stat"><div className="small">Problems</div><strong>{p}</strong></div><div className="stat"><div className="small">Opportunities</div><strong>{o}</strong></div><div className="stat"><div className="small">Research topics</div><strong>{topics.length}</strong></div></div></div><div className="two-col" style={{marginTop:16}}><div className="card"><div className="section-head"><h3>Agent activity</h3><span className="small">Continuous discovery</span></div>{runs.length?runs.slice(0,6).map(r=><div className="trend" key={r.id}><div><div className="title-cell">{r.topic||'Discovery cycle'}</div><div className="small">{r.status} · {r.signals_analyzed} analyzed · {r.problems_found} problems · {r.opportunities_found} opportunities</div></div><div className="small">{new Date(r.started_at).toLocaleString()}</div></div>):<div className="empty">No autonomous cycles yet.</div>}</div><div className="card"><div className="section-head"><h3>What the agent is exploring</h3><span className="small">AI-generated + seed topics</span></div>{topics.map(t=><div className="trend" key={t.id}><div><div className="title-cell">{t.topic}</div><div className="small">Priority {t.priority} · researched {t.times_researched}×</div></div><div className="small">{t.last_researched_at?new Date(t.last_researched_at).toLocaleDateString():'Queued'}</div></div>)}</div></div></div>}
+'use client';
+
+import { useEffect, useMemo, useState } from 'react';
+
+type Run = {
+  id: string;
+  status: string;
+  topic: string | null;
+  signals_collected: number;
+  signals_analyzed: number;
+  problems_found: number;
+  opportunities_found: number;
+  started_at: string;
+  completed_at?: string | null;
+  error?: string | null;
+};
+
+type Topic = {
+  id: string;
+  topic: string;
+  priority: number;
+  times_researched: number;
+  last_researched_at?: string | null;
+};
+
+type Opportunity = {
+  id: string;
+  name: string;
+  description?: string | null;
+  score: number;
+  problem_id?: string;
+  problem?: { title?: string; target_customer?: string; demand_score?: number; pain_score?: number; payment_score?: number } | null;
+  competitor_count?: number;
+  validation_count?: number;
+};
+
+type Props = { initialRuns: Run[]; initialTopics: Topic[] };
+
+const SOURCES = ['Reddit', 'X', 'Web', 'GitHub'];
+
+export function AutonomousDashboard({ initialRuns, initialTopics }: Props) {
+  const [runs, setRuns] = useState(initialRuns);
+  const [topics, setTopics] = useState(initialTopics);
+  const [opportunities, setOpportunities] = useState<Opportunity[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [stage, setStage] = useState('Ready to discover');
+  const [completed, setCompleted] = useState(0);
+  const [error, setError] = useState('');
+
+  async function refresh() {
+    const r = await fetch('/api/autonomous/status', { cache: 'no-store' });
+    if (!r.ok) return;
+    const j = await r.json();
+    setRuns(j.runs || []);
+    setTopics(j.topics || []);
+    setOpportunities(j.opportunities || []);
+  }
+
+  useEffect(() => {
+    refresh();
+  }, []);
+
+  const totals = useMemo(() => runs.reduce((a, r) => ({
+    signals: a.signals + Number(r.signals_analyzed || 0),
+    problems: a.problems + Number(r.problems_found || 0),
+    opportunities: a.opportunities + Number(r.opportunities_found || 0),
+  }), { signals: 0, problems: 0, opportunities: 0 }), [runs]);
+
+  async function discover() {
+    if (busy) return;
+    setBusy(true);
+    setError('');
+    setCompleted(0);
+    const cycles = 3;
+    try {
+      for (let i = 0; i < cycles; i += 1) {
+        setStage(i === 0 ? 'Finding fresh markets and customer problems…' : `Exploring research direction ${i + 1} of ${cycles}…`);
+        const r = await fetch('/api/autonomous/run-now-v3', { method: 'POST' });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(j.error || `Discovery cycle ${i + 1} failed`);
+        setCompleted(i + 1);
+        await refresh();
+        setStage(i < cycles - 1 ? 'Collecting evidence from Reddit, X, Web and GitHub…' : 'Ranking opportunities and preparing validation plans…');
+      }
+      await refresh();
+      setStage('Discovery complete — new opportunities are ready.');
+    } catch (e: any) {
+      setError(e?.message || 'Discovery failed');
+      setStage('Discovery stopped safely');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className="agent-panel">
+      <div className="agent-hero">
+        <div>
+          <div className="eyebrow">Autonomous opportunity engine</div>
+          <h2>Find product opportunities without choosing the topic.</h2>
+          <p>One click makes Soln-Agent choose fresh research directions, search public conversations, detect real problems, measure demand, check competition and turn the strongest signals into product opportunities.</p>
+        </div>
+        <button className="discover-button" onClick={discover} disabled={busy}>
+          <span className="button-dot" />{busy ? 'Discovering…' : 'Discover opportunities'}
+        </button>
+      </div>
+
+      <div className="source-strip">
+        <span className="small">Live sources</span>
+        {SOURCES.map(source => <span className="source-chip" key={source}><i />{source}</span>)}
+      </div>
+
+      {busy && (
+        <div className="run-progress">
+          <div className="progress-head"><strong>{stage}</strong><span>{completed}/{cycles} research passes</span></div>
+          <div className="progress-track"><div className="progress-bar" style={{ width: `${Math.max(8, (completed / cycles) * 100)}%` }} /></div>
+          <div className="progress-steps"><span className="active">Discover</span><span>Evidence</span><span>Problems</span><span>Demand</span><span>Competition</span><span>Opportunities</span></div>
+        </div>
+      )}
+
+      {error && <div className="error-note">{error}</div>}
+      {!busy && stage !== 'Ready to discover' && <div className="success-note">{stage}</div>}
+
+      <div className="agent-metrics">
+        <div><span>Evidence analyzed</span><strong>{totals.signals}</strong></div>
+        <div><span>Real problems</span><strong>{totals.problems}</strong></div>
+        <div><span>Opportunities</span><strong>{Math.max(opportunities.length, totals.opportunities)}</strong></div>
+        <div><span>Research directions</span><strong>{topics.length}</strong></div>
+      </div>
+
+      <div className="opportunity-layout">
+        <div className="glass-card opportunity-card">
+          <div className="section-head"><div><div className="eyebrow">Output</div><h3>Product opportunities</h3></div><a className="link" href="/opportunities">View all →</a></div>
+          {opportunities.length ? opportunities.slice(0, 6).map(o => (
+            <a className="opportunity-row" href={`/opportunities/${o.id}`} key={o.id}>
+              <div className="opp-rank">{Math.round(Number(o.score || 0))}</div>
+              <div className="opp-copy"><strong>{o.name}</strong><span>{o.problem?.target_customer || 'Customer segment being validated'}</span><small>{o.problem?.demand_score != null ? `Demand ${Math.round(o.problem.demand_score)}` : 'Demand analysis'} · {o.competitor_count ?? 0} competitors · {o.validation_count ?? 0} validation plan</small></div>
+              <span className="arrow">↗</span>
+            </a>
+          )) : <div className="empty-state"><div className="empty-orb">✦</div><strong>No opportunities yet</strong><span>Click Discover opportunities. The agent will decide what markets deserve investigation.</span></div>}
+        </div>
+
+        <div className="glass-card activity-card">
+          <div className="section-head"><div><div className="eyebrow">Agent memory</div><h3>Research directions</h3></div></div>
+          {topics.slice(0, 8).map(t => <div className="direction-row" key={t.id}><div><strong>{t.topic}</strong><span>Priority {t.priority} · researched {t.times_researched}×</span></div><em>{t.last_researched_at ? new Date(t.last_researched_at).toLocaleDateString() : 'Ready'}</em></div>)}
+          {!topics.length && <div className="empty-state compact"><strong>Waiting for the first discovery pass.</strong></div>}
+        </div>
+      </div>
+
+      <div className="glass-card recent-card">
+        <div className="section-head"><div><div className="eyebrow">Trace</div><h3>What the agent did</h3></div><span className="small">Latest first</span></div>
+        {runs.slice(0, 5).map(r => <div className="run-row" key={r.id}><span className={`run-status ${r.status}`}>{r.status}</span><div><strong>{r.topic || 'Autonomous discovery'}</strong><span>{r.signals_analyzed || 0} analyzed · {r.problems_found || 0} problems · {r.opportunities_found || 0} opportunities</span></div><time>{new Date(r.started_at).toLocaleString()}</time></div>)}
+        {!runs.length && <div className="empty-state compact"><strong>No discovery runs yet.</strong></div>}
+      </div>
+    </section>
+  );
+}
