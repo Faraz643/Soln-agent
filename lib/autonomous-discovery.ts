@@ -37,11 +37,17 @@ async function generateTopics(existing: string[]) {
   return Array.isArray(parsed.topics) ? parsed.topics : [];
 }
 
+function isEligibleTopic(row: any) {
+  return row?.metadata?.topic_type === 'customer_workflow_pain' && String(row.topic || '').trim().length >= 18;
+}
+
 export async function ensureTopicQueue() {
   const c = db();
-  const { data: rows } = await c.from('discovery_topics').select('topic').eq('status', 'active').order('last_researched_at', { ascending: true, nullsFirst: true }).limit(100);
-  const existing = (rows || []).map((x: any) => String(x.topic));
-  if (existing.length >= 10) return existing;
+  const { data: rows } = await c.from('discovery_topics').select('topic,metadata').eq('status', 'active').order('last_researched_at', { ascending: true, nullsFirst: true }).limit(150);
+  const all = rows || [];
+  const eligible = all.filter(isEligibleTopic);
+  const existing = all.map((x: any) => String(x.topic));
+  if (eligible.length >= 8) return existing;
   const generated = await generateTopics(existing);
   const cleaned = generated
     .map((x: any) => ({ topic: String(x.topic || '').trim(), reason: String(x.reason || '').trim(), priority: Math.max(1, Math.min(100, Number(x.priority) || 50)) }))
@@ -56,9 +62,11 @@ export async function pickTopic() {
   const c = db();
   await ensureTopicQueue();
   const now = new Date().toISOString();
-  const { data } = await c.from('discovery_topics').select('*').eq('status', 'active').or(`next_research_at.is.null,next_research_at.lte.${now}`).order('priority', { ascending: false }).order('last_researched_at', { ascending: true, nullsFirst: true }).limit(1).maybeSingle();
-  if (data) return data;
-  return (await c.from('discovery_topics').select('*').eq('status', 'active').order('last_researched_at', { ascending: true, nullsFirst: true }).limit(1).maybeSingle()).data;
+  const { data: rows } = await c.from('discovery_topics').select('*').eq('status', 'active').or(`next_research_at.is.null,next_research_at.lte.${now}`).order('priority', { ascending: false }).order('last_researched_at', { ascending: true, nullsFirst: true }).limit(50);
+  const eligible = (rows || []).filter(isEligibleTopic);
+  if (eligible.length) return eligible[0];
+  const { data: fallback } = await c.from('discovery_topics').select('*').eq('status', 'active').order('last_researched_at', { ascending: true, nullsFirst: true }).limit(50);
+  return (fallback || []).find(isEligibleTopic) || null;
 }
 
 export async function markTopic(topicId: string, success: boolean) {
