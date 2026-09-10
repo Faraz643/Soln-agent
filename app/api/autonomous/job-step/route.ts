@@ -39,7 +39,7 @@ export async function POST(request: NextRequest) {
     const topic = String(current.topic || '');
     const masterId = String(m.master_discovery_run_id || '');
     const sources: string[] = Array.isArray(m.sources) ? m.sources : ['reddit', 'web', 'github'];
-    const analysisCap = Math.min(Math.max(Number(m.analysis_cap || 24), 6), 40);
+    const analysisCap = Math.min(Math.max(Number(m.analysis_cap || 12), 6), 20);
 
     if (m.phase === 'discover') {
       const index = Number(m.source_index || 0);
@@ -78,7 +78,7 @@ export async function POST(request: NextRequest) {
         await c.from('agent_runs').update({ status: 'running', metadata: { ...m, phase: 'cluster' } }).eq('id', id);
         return NextResponse.json({ ok: true, done: false, phase: 'cluster', message: `Analysis cap of ${analysisCap} evidence items reached.` });
       }
-      const pending = ids.filter((x: string) => !doneSet.has(x)).slice(0, 2);
+      const pending = ids.filter((x: string) => !doneSet.has(x)).slice(0, 1);
       if (pending.length) {
         const result = await internalPost(request, '/api/analyze', { raw_document_ids: pending });
         const analyzedCount = Number(current.signals_analyzed || 0) + Number(result.analyzed || pending.length);
