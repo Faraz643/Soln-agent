@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { pickTopic } from '@/lib/autonomous-discovery';
 import { isApiAuthorized } from '@/lib/api-auth';
 
 const db = () => createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!, { auth: { persistSession: false, autoRefreshToken: false } });
@@ -11,9 +10,15 @@ export async function POST(request: NextRequest) {
   const { data: active } = await c.from('agent_runs').select('id,status,topic,metadata,started_at').in('status', ['running', 'processing']).order('started_at', { ascending: false }).limit(1).maybeSingle();
   if (active) return NextResponse.json({ ok: true, resumed: true, agent_run_id: active.id, topic: active.topic, status: active.status, metadata: active.metadata || {} });
 
-  let topic: any;
-  try { topic = await pickTopic(); } catch (e: any) { return NextResponse.json({ error: e?.message || 'Could not choose a research topic' }, { status: 503 }); }
-  if (!topic?.topic) return NextResponse.json({ error: 'No research topic available' }, { status: 503 });
+  const now = new Date().toISOString();
+  let { data: topic } = await c.from('discovery_topics').select('*').eq('status', 'active').or(`next_research_at.is.null,next_research_at.lte.${now}`).order('priority', { ascending: false }).order('last_researched_at', { ascending: true, nullsFirst: true }).limit(1).maybeSingle();
+  if (!topic?.topic) {
+    const fallback = 'customer support, sales and operations workflows with repeated manual work';
+    await c.from('discovery_topics').upsert({ topic: fallback, source: 'system', priority: 50, status: 'active', metadata: { reason: 'Safe fallback direction for autonomous discovery' } }, { onConflict: 'topic' });
+    const result = await c.from('discovery_topics').select('*').eq('topic', fallback).single();
+    topic = result.data;
+  }
+  if (!topic?.topic) return NextResponse.json({ error: 'No research topic is available' }, { status: 503 });
 
   const sources = ['reddit', 'web', 'github', ...(process.env.X_BEARER_TOKEN ? ['x'] : [])];
   const metadata = { version: 5, autonomous: true, phase: 'discover', source_index: 0, sources, topic_id: topic.id, analyzed_count: 0, analysis_cap: 12, clustered: false, enriched: [] };
