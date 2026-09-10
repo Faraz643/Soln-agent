@@ -18,7 +18,7 @@ async function reddit(query: string) {
   const r = await fetch(u, { headers:{'User-Agent':'Soln-Agent/1.0 demand-research'}, cache:'no-store' });
   if (!r.ok) return [];
   const j = await r.json();
-  return (j.data?.children || []).map((x:any) => { const p=x.data; return { source:'reddit', external_id:String(p.id), url:`https://www.reddit.com${p.permalink}`, title:p.title || '', content:[p.selftext,p.title].filter(Boolean).join('\n\n'), published_at:p.created_utc ? new Date(p.created_utc*1000).toISOString() : null, metadata:{subreddit:p.subreddit, score:p.score, comments:p.num_comments, author:p.author, query} }; });
+  return (j.data?.children || []).map((x:any) => { const p=x.data; return { source:'reddit', external_id:String(p.id), url:`https://www.reddit.com${p.permalink}`, title:p.title || '', content:[p.title,p.selftext].filter(Boolean).join('\n\n'), published_at:p.created_utc ? new Date(p.created_utc*1000).toISOString() : null, metadata:{subreddit:p.subreddit, score:p.score, comments:p.num_comments, author:p.author, query} }; });
 }
 
 async function web(query: string) {
@@ -37,16 +37,15 @@ export async function POST(request: NextRequest) {
   const runDb=db(); const {data:run,error:runError}=await runDb.from('discovery_runs').insert({query,status:'running',sources}).select('id').single(); if(runError) return NextResponse.json({error:runError.message},{status:500});
   try {
     const batches=await Promise.all([sources.includes('github')?github(query):[],sources.includes('reddit')?reddit(query):[],sources.includes('web')?web(`${query} problem OR complaint OR workaround OR "looking for"`):[]]);
-    const documents=batches.flat();
-    const bySource:any={}; for(const d of documents){bySource[d.source]??=[];bySource[d.source].push(d);}
+    const documents=batches.flat(); const bySource:any={}; for(const d of documents){bySource[d.source]??=[];bySource[d.source].push(d);}
     let inserted=0;
     for(const [type,docs] of Object.entries(bySource)){
       const name=type==='github'?'GitHub':type==='reddit'?'Reddit':'Web Search';
       const {data:src,error:se}=await runDb.from('sources').upsert({name,type,enabled:true,last_collected_at:new Date().toISOString(),last_error:null},{onConflict:'name'}).select('id').single(); if(se) throw se;
-      const rows=(docs as any[]).map(d=>({...d,source_id:src.id,content:clean(d.content||''),metadata:d.metadata||{}}));
+      const rows=(docs as any[]).map(d=>({source_id:src.id,external_id:d.external_id,url:d.url||null,title:d.title||null,content:clean(d.content||''),published_at:d.published_at||null,metadata:d.metadata||{}}));
       const {data:ins,error:ie}=await runDb.from('raw_documents').upsert(rows,{onConflict:'source_id,external_id',ignoreDuplicates:true}).select('id'); if(ie) throw ie; inserted+=ins?.length||0;
     }
-    await runDb.from('discovery_runs').update({status:'completed',signals_collected:inserted,completed_at:new Date().toISOString()}).eq('id',run.id);
+    await runDb.from('discovery_runs').update({status:'completed',signals_collected:documents.length,completed_at:new Date().toISOString()}).eq('id',run.id);
     return NextResponse.json({ok:true,run_id:run.id,query,sources,signals_collected:documents.length,inserted});
   } catch(e:any) { await runDb.from('discovery_runs').update({status:'error',error:e?.message||'Discovery failed',completed_at:new Date().toISOString()}).eq('id',run.id); return NextResponse.json({error:e?.message||'Discovery failed',run_id:run.id},{status:500}); }
 }
