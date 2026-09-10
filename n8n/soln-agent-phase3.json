@@ -1,14 +1,10 @@
 {
-  "name": "Soln Agent - Phase 3 AI Analysis",
-  "nodes": [
+  "name":"Soln Agent - Product Demand Analysis",
+  "nodes":[
     {"parameters":{"rule":{"interval":[{"field":"hours","hoursInterval":6}]}},"id":"schedule","name":"Every 6 Hours","type":"n8n-nodes-base.scheduleTrigger","typeVersion":1.2,"position":[-420,0]},
-    {"parameters":{"method":"POST","url":"https://soln-agent-bay.vercel.app/api/analyze","sendHeaders":true,"headerParameters":{"parameters":[{"name":"Authorization","value":"Bearer REPLACE_WITH_INGEST_SECRET"},{"name":"Content-Type","value":"application/json"}]},"sendBody":true,"contentType":"raw","rawContentType":"application/json","body":"={\"limit\":20}","options":{"response":{"response":{"responseFormat":"json"}}}},"id":"analyze","name":"Analyze Latest Documents","type":"n8n-nodes-base.httpRequest","typeVersion":4.2,"position":[-140,0]},
-    {"parameters":{"jsCode":"const r=$json; return [{json:{ok:r.ok===true, analyzed:r.analyzed||0, verified:(r.results||[]).filter(x=>x.status==='verified').length, candidates:(r.results||[]).filter(x=>x.status==='candidate').length, rejected:(r.results||[]).filter(x=>x.status==='rejected').length, errors:(r.results||[]).filter(x=>x.status==='error').length}}];"},"id":"summary","name":"Analysis Summary","type":"n8n-nodes-base.code","typeVersion":2,"position":[120,0]}
+    {"parameters":{"method":"POST","url":"https://soln-agent-bay.vercel.app/api/analyze","sendHeaders":true,"headerParameters":{"parameters":[{"name":"Authorization","value":"Bearer REPLACE_WITH_INGEST_SECRET"},{"name":"Content-Type","value":"application/json"}]},"sendBody":true,"contentType":"raw","rawContentType":"application/json","body":"={\"limit\":50}","options":{"response":{"response":{"responseFormat":"json"}}}},"id":"analyze","name":"Analyze Demand Signals","type":"n8n-nodes-base.httpRequest","typeVersion":4.2,"position":[-140,0]},
+    {"parameters":{"jsCode":"const r=$json; const rows=r.results||[]; return [{json:{ok:r.ok===true,analyzed:r.analyzed||0,verified:rows.filter(x=>x.status==='verified').length,candidates:rows.filter(x=>x.status==='candidate').length,rejected:rows.filter(x=>x.status==='rejected').length,errors:rows.filter(x=>x.status==='error').length,avgDemand:rows.length?Math.round(rows.reduce((s,x)=>s+Number(x.demand_score||0),0)/rows.length):0,avgPain:rows.length?Math.round(rows.reduce((s,x)=>s+Number(x.pain_score||0),0)/rows.length):0,avgOpportunity:rows.length?Math.round(rows.reduce((s,x)=>s+Number(x.opportunity_score||0),0)/rows.length):0}}];"},"id":"summary","name":"Demand Intelligence Summary","type":"n8n-nodes-base.code","typeVersion":2,"position":[120,0]}
   ],
-  "connections":{"Every 6 Hours":{"main":[[{"node":"Analyze Latest Documents","type":"main","index":0}]]},"Analyze Latest Documents":{"main":[[{"node":"Analysis Summary","type":"main","index":0}]]}},
-  "active":false,
-  "settings":{"executionOrder":"v1"},
-  "versionId":"soln-agent-phase3-v1",
-  "meta":{"templateCredsSetupCompleted":true},
-  "pinData":{}
+  "connections":{"Every 6 Hours":{"main":[[{"node":"Analyze Demand Signals","type":"main","index":0}]]},"Analyze Demand Signals":{"main":[[{"node":"Demand Intelligence Summary","type":"main","index":0}]]}},
+  "active":false,"settings":{"executionOrder":"v1"},"versionId":"product-demand-v1","meta":{"templateCredsSetupCompleted":true},"pinData":{}
 }
