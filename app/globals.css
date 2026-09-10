@@ -1,0 +1,28 @@
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; min-height: 100%; }
+body { font-family: Arial, Helvetica, sans-serif; background: #f6f7fb; color: #111827; }
+a { color: inherit; text-decoration: none; }
+button, input { font: inherit; }
+.shell { min-height: 100vh; display: grid; grid-template-columns: 240px 1fr; }
+.sidebar { border-right: 1px solid #e5e7eb; background: #fff; padding: 24px 16px; }
+.brand { font-size: 20px; font-weight: 800; padding: 0 10px 28px; }
+.nav { display: grid; gap: 6px; }
+.nav a { padding: 11px 12px; border-radius: 10px; color: #6b7280; font-size: 14px; }
+.nav a.active, .nav a:hover { background: #f0f1f5; color: #111827; }
+.main { min-width: 0; }
+.header { height: 72px; border-bottom: 1px solid #e5e7eb; background: rgba(255,255,255,.9); display: flex; align-items: center; justify-content: space-between; padding: 0 32px; }
+.badge { font-size: 12px; padding: 6px 9px; border: 1px solid #e5e7eb; border-radius: 999px; background: #fff; }
+.content { padding: 32px; max-width: 1280px; margin: 0 auto; }
+.eyebrow { color: #6b7280; font-size: 12px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+h1 { margin: 8px 0 10px; font-size: 34px; line-height: 1.1; }
+.lead { color: #6b7280; max-width: 680px; line-height: 1.6; margin-bottom: 28px; }
+.grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; }
+.card { background: #fff; border: 1px solid #e5e7eb; border-radius: 14px; padding: 20px; }
+.metric { font-size: 28px; font-weight: 800; margin-top: 8px; }
+.muted { color: #6b7280; font-size: 13px; }
+.section { margin-top: 28px; }
+.section h2 { font-size: 18px; margin: 0 0 12px; }
+.status { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
+.status-dot { width: 9px; height: 9px; border-radius: 50%; background: #22c55e; display: inline-block; margin-right: 7px; }
+@media (max-width: 900px) { .shell { grid-template-columns: 1fr; } .sidebar { display: none; } .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 560px) { .content { padding: 20px; } .header { padding: 0 20px; } .grid { grid-template-columns: 1fr; } h1 { font-size: 28px; } }
