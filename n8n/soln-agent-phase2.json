@@ -1,0 +1,113 @@
+{
+  "name": "Soln Agent - Phase 2 Data Collection",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "schedule",
+      "name": "Every 6 Hours",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [-760, 80]
+    },
+    {
+      "parameters": {
+        "url": "https://api.github.com/search/issues?q=(feature+request+OR+\"looking+for\"+OR+\"would+be+nice\"+OR+\"manual\"+OR+\"takes+too+long\")+is:issue+is:open&sort=updated&order=desc&per_page=50",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Accept", "value": "application/vnd.github+json" },
+            { "name": "X-GitHub-Api-Version", "value": "2022-11-28" },
+            { "name": "User-Agent", "value": "Soln-Agent" }
+          ]
+        },
+        "options": { "response": { "response": { "responseFormat": "json" } } }
+      },
+      "id": "github-search",
+      "name": "GitHub Open Issues",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [-520, -80]
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $json.items || [];\nreturn items.map(i => ({ json: { source: 'github', external_id: String(i.id), url: i.html_url, title: i.title, content: i.body || '', published_at: i.created_at, metadata: { repository: i.repository_url, state: i.state, labels: (i.labels || []).map(l => l.name), comments: i.comments, reactions: i.reactions?.total_count || 0 } } }));"
+      },
+      "id": "normalize-github",
+      "name": "Normalize GitHub",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-280, -80]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://localhost:3000/api/ingest",
+        "sendHeaders": true,
+        "headerParameters": { "parameters": [ { "name": "Authorization", "value": "Bearer REPLACE_WITH_INGEST_SECRET" }, { "name": "Content-Type", "value": "application/json" } ] },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify({ documents: $input.all().map(i => i.json) }) }}",
+        "options": { "response": { "response": { "responseFormat": "json" } } }
+      },
+      "id": "ingest-github",
+      "name": "Ingest GitHub",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [0, -80]
+    },
+    {
+      "parameters": {
+        "url": "https://www.reddit.com/r/startups+Entrepreneur+SaaS+smallbusiness+sideproject/new.json?limit=50&raw_json=1",
+        "sendHeaders": true,
+        "headerParameters": { "parameters": [ { "name": "User-Agent", "value": "Soln-Agent/1.0 data-collection" } ] },
+        "options": { "response": { "response": { "responseFormat": "json" } } }
+      },
+      "id": "reddit-search",
+      "name": "Reddit New Posts",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [-520, 240]
+    },
+    {
+      "parameters": {
+        "jsCode": "const children = $json.data?.children || [];\nreturn children.map(x => { const p = x.data; return { json: { source: 'reddit', external_id: p.id, url: p.permalink ? `https://www.reddit.com${p.permalink}` : null, title: p.title || '', content: p.selftext || '', published_at: p.created_utc ? new Date(p.created_utc * 1000).toISOString() : null, metadata: { subreddit: p.subreddit, score: p.score, comments: p.num_comments, upvote_ratio: p.upvote_ratio, author: p.author || null } } }; });"
+      },
+      "id": "normalize-reddit",
+      "name": "Normalize Reddit",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-280, 240]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://localhost:3000/api/ingest",
+        "sendHeaders": true,
+        "headerParameters": { "parameters": [ { "name": "Authorization", "value": "Bearer REPLACE_WITH_INGEST_SECRET" }, { "name": "Content-Type", "value": "application/json" } ] },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify({ documents: $input.all().map(i => i.json) }) }}",
+        "options": { "response": { "response": { "responseFormat": "json" } } }
+      },
+      "id": "ingest-reddit",
+      "name": "Ingest Reddit",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [0, 240]
+    }
+  ],
+  "connections": {
+    "Every 6 Hours": { "main": [[{ "node": "GitHub Open Issues", "type": "main", "index": 0 }, { "node": "Reddit New Posts", "type": "main", "index": 0 }]] },
+    "GitHub Open Issues": { "main": [[{ "node": "Normalize GitHub", "type": "main", "index": 0 }]] },
+    "Normalize GitHub": { "main": [[{ "node": "Ingest GitHub", "type": "main", "index": 0 }]] },
+    "Reddit New Posts": { "main": [[{ "node": "Normalize Reddit", "type": "main", "index": 0 }]] },
+    "Normalize Reddit": { "main": [[{ "node": "Ingest Reddit", "type": "main", "index": 0 }]] }
+  },
+  "active": false,
+  "settings": { "executionOrder": "v1" },
+  "versionId": "soln-agent-phase2-v1",
+  "meta": { "templateCredsSetupCompleted": true },
+  "pinData": {}
+}
