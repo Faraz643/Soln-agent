@@ -60,14 +60,20 @@ export async function POST(req: NextRequest) {
     const competition = avg(list, 'competition_score');
     const score = opportunityScore(list);
 
-    // A problem is allowed to exist with one strong signal. An opportunity is not.
-    // It needs recurrence or unusually strong monetary evidence, recent evidence,
-    // and consistently strong demand/pain/evidence scores.
+    // A problem can be surfaced from one strong signal. A product opportunity needs
+    // corroboration: repeated evidence, cross-source evidence, or unusually explicit
+    // payment/workflow evidence. The thresholds are intentionally strict enough to
+    // suppress keyword noise but practical enough that normal source fragmentation does
+    // not make the product-output page permanently empty.
+    const recurring = list.length >= 2;
+    const crossSource = sourceCount >= 2;
+    const strongPaid = payment >= 75 && evidenceQuality >= 60;
+    const strongSingleSignal = list.length === 1 && payment >= 85 && pain >= 75 && demand >= 70 && evidenceQuality >= 75 && confidence >= 70;
     const qualifiesProblem = relevance >= 70 && confidence >= 55 && evidenceQuality >= 50 && pain >= 45;
-    const qualifiesOpportunity = qualifiesProblem && recentCount > 0 && score >= 75 && pain >= 60 && demand >= 60 && evidenceQuality >= 60 && confidence >= 60 && ((list.length >= 2 && sourceCount >= 2) || payment >= 70);
+    const qualifiesOpportunity = qualifiesProblem && recentCount > 0 && score >= 68 && pain >= 55 && demand >= 55 && evidenceQuality >= 55 && confidence >= 55 && (crossSource || recurring || strongPaid || strongSingleSignal);
     if (!qualifiesProblem) { rejectedGroups++; continue; }
 
-    const best = [...list].sort((a: any, b: any) => (Number(b.evidence_quality || 0) + Number(b.demand_score || 0)) - (Number(a.evidence_quality || 0) + Number(a.demand_score || 0)))[0];
+    const best = [...list].sort((a: any, b: any) => (Number(b.evidence_quality || 0) + Number(b.demand_score || 0) + Number(b.pain_score || 0)) - (Number(a.evidence_quality || 0) + Number(a.demand_score || 0) + Number(a.pain_score || 0)))[0];
     const title = String(best.problem_summary || 'Unspecified customer problem').replace(/\s+/g, ' ').trim().slice(0, 240);
     const seg = [...new Set(list.flatMap((x: any) => Array.isArray(x.customer_segments) ? x.customer_segments : []))] as string[];
     const target = seg.join(', ') || 'Customer segment requires validation';
@@ -79,7 +85,7 @@ export async function POST(req: NextRequest) {
       recent_evidence_count: recentCount,
       last_research_run_id: runId,
       research_query: run.data.query,
-      quality_gate: { relevance, confidence, evidence: evidenceQuality, pain, demand, payment, urgency, workaround, competition, opportunity_score: score, recurring: list.length >= 2 && sourceCount >= 2 },
+      quality_gate: { relevance, confidence, evidence: evidenceQuality, pain, demand, payment, urgency, workaround, competition, opportunity_score: score, recurring, cross_source: crossSource, strong_paid: strongPaid },
     };
 
     const existing = await c.from('problems').select('id').eq('title', title).limit(1).maybeSingle();
