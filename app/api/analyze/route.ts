@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { DEMAND_SYSTEM_PROMPT, normalizeDemandAnalysis } from '@/lib/demand-intelligence';
+import { isApiAuthorized } from '@/lib/api-auth';
 
 export const maxDuration = 60;
-
 const json = (v: unknown) => typeof v === 'object' && v !== null ? v as Record<string, unknown> : {};
 const db = () => createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!, { auth: { persistSession: false, autoRefreshToken: false } });
 
@@ -25,9 +25,7 @@ async function githubState(url: string | null) {
     }
     const closed = issue.state === 'closed';
     return { isOpen: !closed, hasPr, isSolved: closed, reason: closed ? `GitHub issue is ${issue.state_reason || 'closed'}` : null };
-  } catch {
-    return { isOpen: null, hasPr: false, isSolved: false, reason: null };
-  }
+  } catch { return { isOpen: null, hasPr: false, isSolved: false, reason: null }; }
 }
 
 async function callGemini(input: { title: string; content: string; source: string; metadata: Record<string, unknown>; lifecycle: Record<string, unknown> }) {
@@ -35,14 +33,8 @@ async function callGemini(input: { title: string; content: string; source: strin
   if (!key) throw new Error('GEMINI_API_KEY is not configured');
   const model = process.env.GEMINI_MODEL || 'gemini-3.1-flash-lite';
   const payload = JSON.stringify(input).slice(0, 30000);
-  const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(key)}`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ system_instruction: { parts: [{ text: DEMAND_SYSTEM_PROMPT }] }, contents: [{ role: 'user', parts: [{ text: payload }] }], generationConfig: { temperature: 0, responseMimeType: 'application/json' } }),
-  });
-  if (!res.ok) {
-    const detail = await res.text().catch(() => '');
-    throw new Error(`Gemini API returned ${res.status}${detail ? `: ${detail.slice(0, 300)}` : ''}`);
-  }
+  const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(key)}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ system_instruction: { parts: [{ text: DEMAND_SYSTEM_PROMPT }] }, contents: [{ role: 'user', parts: [{ text: payload }] }], generationConfig: { temperature: 0, responseMimeType: 'application/json' } }) });
+  if (!res.ok) { const detail = await res.text().catch(() => ''); throw new Error(`Gemini API returned ${res.status}${detail ? `: ${detail.slice(0, 300)}` : ''}`); }
   const data = await res.json();
   const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
   if (!text) throw new Error('Gemini returned no analysis');
@@ -68,8 +60,7 @@ async function analyzeOne(doc: any, c: ReturnType<typeof db>) {
       confidence_score: ai.confidence_score, rejection_reason: status === 'rejected' ? (ai.rejection_reason || 'Not a meaningful problem signal') : null,
       evidence: { source, metadata: meta, lifecycle: gh, model_scores: { pain: ai.pain_score, demand: ai.demand_score, payment: ai.payment_score, evidence_quality: ai.evidence_quality, urgency: ai.urgency_score, competition: ai.competition_score, workaround: ai.workaround_score }, customer_segments: ai.customer_segments, ai_evidence: ai.evidence },
       model, analyzed_at: new Date().toISOString(), updated_at: new Date().toISOString(), pain_score: ai.pain_score, demand_score: ai.demand_score,
-      payment_score: ai.payment_score, evidence_quality: ai.evidence_quality, urgency_score: ai.urgency_score, competition_score: ai.competition_score,
-      workaround_score: ai.workaround_score, customer_segments: ai.customer_segments,
+      payment_score: ai.payment_score, evidence_quality: ai.evidence_quality, urgency_score: ai.urgency_score, competition_score: ai.competition_score, workaround_score: ai.workaround_score, customer_segments: ai.customer_segments,
     };
     const { data: saved, error: saveError } = await c.from('document_analyses').upsert(row, { onConflict: 'raw_document_id' }).select().single();
     if (saveError) throw saveError;
@@ -81,48 +72,27 @@ async function analyzeOne(doc: any, c: ReturnType<typeof db>) {
 }
 
 async function mapWithConcurrency<T, R>(items: T[], concurrency: number, fn: (item: T) => Promise<R>) {
-  const out: R[] = new Array(items.length);
-  let next = 0;
-  async function worker() {
-    while (true) {
-      const i = next++;
-      if (i >= items.length) return;
-      out[i] = await fn(items[i]);
-    }
-  }
+  const out: R[] = new Array(items.length); let next = 0;
+  async function worker() { while (true) { const i = next++; if (i >= items.length) return; out[i] = await fn(items[i]); } }
   await Promise.all(Array.from({ length: Math.min(concurrency, Math.max(items.length, 1)) }, worker));
   return out;
 }
 
 export async function POST(request: NextRequest) {
-  const expected = process.env.INGEST_SECRET;
-  if (!expected || request.headers.get('authorization') !== `Bearer ${expected}`) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  if (!(await isApiAuthorized(request))) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   const body = await request.json().catch(() => null);
   const ids: string[] = Array.isArray(body?.raw_document_ids) ? body.raw_document_ids : [];
   const requestedRunId = typeof body?.run_id === 'string' ? body.run_id : null;
   const limit = Math.min(Math.max(Number(body?.limit) || 25, 1), 50);
   const c = db();
-
-  // Never silently analyze an unrelated global backlog. If a caller does not
-  // provide a run or document IDs, use the latest research run.
   let runId = requestedRunId;
-  if (!runId && !ids.length) {
-    const latest = await c.from('discovery_runs').select('id').order('started_at', { ascending: false }).limit(1).maybeSingle();
-    if (latest.error || !latest.data) return NextResponse.json({ error: 'No research run exists yet' }, { status: 404 });
-    runId = latest.data.id;
-  }
-
-  let docs: any[] | null = null;
-  let error: any = null;
-  let query: string | null = null;
-
+  if (!runId && !ids.length) { const latest = await c.from('discovery_runs').select('id').order('started_at', { ascending: false }).limit(1).maybeSingle(); if (latest.error || !latest.data) return NextResponse.json({ error: 'No research run exists yet' }, { status: 404 }); runId = latest.data.id; }
+  let docs: any[] | null = null; let error: any = null; let query: string | null = null;
   if (runId) {
     const run = await c.from('discovery_runs').select('id,query').eq('id', runId).single();
     if (run.error || !run.data) return NextResponse.json({ error: run.error?.message || 'Research run not found' }, { status: 404 });
     query = run.data.query;
-    const linkRes = await c.from('discovery_run_documents')
-      .select('raw_document_id,raw_documents(id,external_id,url,title,content,published_at,metadata,sources(type,name))')
-      .eq('discovery_run_id', runId).limit(limit);
+    const linkRes = await c.from('discovery_run_documents').select('raw_document_id,raw_documents(id,external_id,url,title,content,published_at,metadata,sources(type,name))').eq('discovery_run_id', runId).limit(limit);
     if (linkRes.error) return NextResponse.json({ error: linkRes.error.message }, { status: 500 });
     docs = (linkRes.data || []).map((x: any) => x.raw_documents).filter(Boolean);
   } else {
@@ -130,7 +100,6 @@ export async function POST(request: NextRequest) {
     ({ data: docs, error } = await c.from('raw_documents').select('id,external_id,url,title,content,published_at,metadata,sources(type,name)').in('id', ids));
   }
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-
   const results = await mapWithConcurrency(docs || [], 4, doc => analyzeOne(doc, c));
   return NextResponse.json({ ok: true, run_id: runId, query, analyzed: results.length, results });
 }
