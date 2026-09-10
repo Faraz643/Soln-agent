@@ -44,5 +44,5 @@ export async function GET(request: NextRequest) {
     const problem = Array.isArray(o.problems) ? o.problems[0] || null : o.problems || null;
     return { id: o.id, name: o.name, description: o.description, score: o.score, problem_id: o.problem_id, problem, competitor_count: competitorCounts[o.id] || 0, validation_count: validationCounts[o.id] || 0 };
   });
-  return NextResponse.json({ ok: true, runs: runs.data || [], topics: topics.data || [], opportunities, sources: { reddit: true, web: true, github: true, x: !!process.env.X_BEARER_TOKEN } });
+  return NextResponse.json({ ok: true, runs: runs.data || [], topics: topics.data || [], opportunities, sources: { reddit: true, web: true, github: true, x: true, x_collection: process.env.X_BEARER_TOKEN ? 'x-api' : 'public-search' } });
 }
