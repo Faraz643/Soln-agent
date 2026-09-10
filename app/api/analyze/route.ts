@@ -25,15 +25,21 @@ async function githubState(url: string | null) {
   } catch { return { isOpen: null, hasPr: false, isSolved: false, reason: null }; }
 }
 
-async function callModel(input: { title: string; content: string; source: string; metadata: Record<string, unknown> }) {
-  const key = process.env.OPENAI_API_KEY;
-  if (!key) throw new Error('OPENAI_API_KEY is not configured');
-  const model = process.env.OPENAI_MODEL || 'gpt-4o-mini';
-  const system = `You are Soln-Agent's strict opportunity classifier. Return ONLY valid JSON. Never invent payment, bounty, demand, or status. Reject spam, announcements, tutorials, generic discussion, vague ideas and insufficient evidence. A paid opportunity requires explicit payment/bounty evidence. Score pain, demand, payment likelihood and opportunity from 0-100. Return: is_problem:boolean,is_paid:boolean,reward_amount:number|null,currency:string|null,difficulty:string|null,technologies:string[],problem_summary:string,opportunity_summary:string,demand_score:number,payment_score:number,pain_score:number,opportunity_score:number,confidence_score:number,rejection_reason:string|null.`;
-  const res = await fetch('https://api.openai.com/v1/chat/completions', { method: 'POST', headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ model, temperature: 0, response_format: { type: 'json_object' }, messages: [{ role: 'system', content: system }, { role: 'user', content: JSON.stringify(input).slice(0, 30000) }] }) });
-  if (!res.ok) throw new Error(`AI provider returned ${res.status}`);
+async function callGemini(input: { title: string; content: string; source: string; metadata: Record<string, unknown> }) {
+  const key = process.env.GEMINI_API_KEY;
+  if (!key) throw new Error('GEMINI_API_KEY is not configured');
+  const model = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+  const system = `You are Soln-Agent's strict opportunity classifier. Return ONLY valid JSON. Never invent payment, bounty, demand, or status. Reject spam, announcements, tutorials, generic discussion, vague ideas and insufficient evidence. A paid opportunity requires explicit payment/bounty evidence. Score pain, demand, payment likelihood and opportunity from 0-100. Return exactly these fields: is_problem:boolean,is_paid:boolean,reward_amount:number|null,currency:string|null,difficulty:string|null,technologies:string[],problem_summary:string,opportunity_summary:string,demand_score:number,payment_score:number,pain_score:number,opportunity_score:number,confidence_score:number,rejection_reason:string|null,is_solved:boolean,has_pr:boolean.`;
+  const payload = JSON.stringify(input).slice(0, 30000);
+  const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(key)}`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ system_instruction: { parts: [{ text: system }] }, contents: [{ role: 'user', parts: [{ text: payload }] }], generationConfig: { temperature: 0, responseMimeType: 'application/json' } }),
+  });
+  if (!res.ok) throw new Error(`Gemini API returned ${res.status}`);
   const data = await res.json();
-  return JSON.parse(data.choices?.[0]?.message?.content || '{}');
+  const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+  if (!text) throw new Error('Gemini returned no analysis');
+  return JSON.parse(text);
 }
 
 export async function POST(request: NextRequest) {
@@ -62,7 +68,7 @@ export async function POST(request: NextRequest) {
       const meta = json(doc.metadata);
       const gh = source === 'github' ? await githubState(doc.url) : { isOpen: null, hasPr: false, isSolved: false, reason: null };
       const stale = !!doc.published_at && Date.now() - new Date(doc.published_at).getTime() > 180 * 86400000;
-      const ai = await callModel({ title: doc.title || '', content: doc.content || '', source, metadata: meta });
+      const ai = await callGemini({ title: doc.title || '', content: doc.content || '', source, metadata: meta });
       const isOpen = source === 'github' && gh.isOpen !== null ? gh.isOpen : null;
       const isSolved = gh.isSolved || ai.is_solved === true;
       const hasPr = gh.hasPr || ai.has_pr === true;
@@ -71,7 +77,7 @@ export async function POST(request: NextRequest) {
       const hardReject = !ai.is_problem || isSolved || (stale && source === 'github') || confidence < 70 || opportunity < 60;
       const status = hardReject ? 'rejected' : (ai.is_paid || opportunity >= 75 ? 'verified' : 'candidate');
       const rejectionReason = hardReject ? (gh.reason || ai.rejection_reason || (stale ? 'Older than 180 days' : confidence < 70 ? 'Low confidence' : 'Does not meet strict opportunity threshold')) : null;
-      const row = { raw_document_id: doc.id, status, is_problem: !!ai.is_problem, is_paid: !!ai.is_paid, reward_amount: ai.reward_amount == null ? null : Number(ai.reward_amount), currency: ai.currency || null, is_open: isOpen, has_pr: hasPr, is_solved: isSolved, is_stale: stale, difficulty: ai.difficulty || null, technologies: Array.isArray(ai.technologies) ? ai.technologies.slice(0, 20) : [], problem_summary: ai.problem_summary || null, opportunity_summary: ai.opportunity_summary || null, opportunity_score: opportunity, confidence_score: confidence, rejection_reason: rejectionReason, evidence: { source, metadata: meta, github: gh, model_scores: { pain: clamp(ai.pain_score), demand: clamp(ai.demand_score), payment: clamp(ai.payment_score) } }, model: process.env.OPENAI_MODEL || 'gpt-4o-mini', analyzed_at: new Date().toISOString(), updated_at: new Date().toISOString() };
+      const row = { raw_document_id: doc.id, status, is_problem: !!ai.is_problem, is_paid: !!ai.is_paid, reward_amount: ai.reward_amount == null ? null : Number(ai.reward_amount), currency: ai.currency || null, is_open: isOpen, has_pr: hasPr, is_solved: isSolved, is_stale: stale, difficulty: ai.difficulty || null, technologies: Array.isArray(ai.technologies) ? ai.technologies.slice(0, 20) : [], problem_summary: ai.problem_summary || null, opportunity_summary: ai.opportunity_summary || null, opportunity_score: opportunity, confidence_score: confidence, rejection_reason: rejectionReason, evidence: { source, metadata: meta, github: gh, model_scores: { pain: clamp(ai.pain_score), demand: clamp(ai.demand_score), payment: clamp(ai.payment_score) } }, model: model, analyzed_at: new Date().toISOString(), updated_at: new Date().toISOString() };
       const { data: saved, error: saveError } = await db.from('document_analyses').upsert(row, { onConflict: 'raw_document_id' }).select().single();
       if (saveError) throw saveError;
       results.push(saved);
