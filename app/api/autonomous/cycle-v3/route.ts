@@ -1,0 +1,5 @@
+import { NextRequest,NextResponse } from 'next/server';
+export const maxDuration=60;
+function auth(req:NextRequest){const s=process.env.INGEST_SECRET;return !!s&&req.headers.get('authorization')===`Bearer ${s}`}
+async function post(path:string,body:Record<string,unknown>,origin:string){const r=await fetch(`${origin}${path}`,{method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${process.env.INGEST_SECRET}`},body:JSON.stringify(body),cache:'no-store'});const j=await r.json().catch(()=>({}));if(!r.ok)throw new Error(j.error||`${path} failed`);return j}
+export async function POST(req:NextRequest){if(!auth(req))return NextResponse.json({error:'Unauthorized'},{status:401});const origin=new URL(req.url).origin;try{const expansion=await post('/api/autonomous/expand',{},origin);const cycle=await post('/api/autonomous/cycle-v2',{},origin);return NextResponse.json({ok:true,expansion,cycle})}catch(e:any){return NextResponse.json({error:e?.message||'Autonomous cycle failed'},{status:500})}}
