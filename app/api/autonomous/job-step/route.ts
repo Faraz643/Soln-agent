@@ -3,6 +3,7 @@ import { createClient } from '@supabase/supabase-js';
 import { markTopic } from '@/lib/autonomous-discovery';
 import { isApiAuthorized } from '@/lib/api-auth';
 
+export const maxDuration = 55;
 const db = () => createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!, { auth: { persistSession: false, autoRefreshToken: false } });
 const meta = (value: any) => value && typeof value === 'object' ? value : {};
 
@@ -39,7 +40,7 @@ export async function POST(request: NextRequest) {
     const topic = String(current.topic || '');
     const masterId = String(m.master_discovery_run_id || '');
     const sources: string[] = Array.isArray(m.sources) ? m.sources : ['reddit', 'web', 'github'];
-    const analysisCap = Math.min(Math.max(Number(m.analysis_cap || 12), 6), 20);
+    const analysisCap = Math.min(Math.max(Number(m.analysis_cap || 20), 8), 30);
 
     if (m.phase === 'discover') {
       const index = Number(m.source_index || 0);
@@ -48,7 +49,6 @@ export async function POST(request: NextRequest) {
         await c.from('agent_runs').update({ status: 'running', metadata: { ...m, phase: 'analyze', source_index: 0 } }).eq('id', id);
         return NextResponse.json({ ok: true, done: false, phase: 'analyze', message: 'All sources collected. Starting evidence analysis.' });
       }
-
       const source = sources[index];
       const discovery = await internalPost(request, '/api/discover', { query: topic, sources: [source] });
       const childId = String(discovery.run_id || '');
@@ -86,13 +86,27 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ ok: true, done: false, phase: 'analyze', analyzed: result.analyzed || pending.length, analyzed_count: analyzedCount, remaining_estimate: Math.max(0, ids.length - doneSet.size - pending.length) });
       }
       await c.from('agent_runs').update({ status: 'running', metadata: { ...m, phase: 'cluster' } }).eq('id', id);
-      return NextResponse.json({ ok: true, done: false, phase: 'cluster', message: 'Evidence analysis complete. Ranking problems and opportunities.' });
+      return NextResponse.json({ ok: true, done: false, phase: 'cluster', message: 'Evidence analysis complete. Ranking recurring problems and opportunities.' });
     }
 
     if (m.phase === 'cluster') {
       const cluster = await internalPost(request, '/api/cluster', { run_id: masterId, limit: 500 });
-      await c.from('agent_runs').update({ status: 'running', problems_found: Number(cluster.problems || 0), opportunities_found: Number(cluster.opportunities || 0), metadata: { ...m, phase: 'finish', clustered: true, opportunity_ids: cluster.opportunity_ids || [] } }).eq('id', id);
-      return NextResponse.json({ ok: true, done: false, phase: 'finish', problems: cluster.problems || 0, opportunities: cluster.opportunities || 0 });
+      const opportunityIds = Array.isArray(cluster.opportunity_ids) ? cluster.opportunity_ids : [];
+      await c.from('agent_runs').update({ status: 'running', problems_found: Number(cluster.problems || 0), opportunities_found: Number(cluster.opportunities || 0), metadata: { ...m, phase: opportunityIds.length ? 'competition' : 'finish', clustered: true, opportunity_ids: opportunityIds, competition_index: 0, rejected_groups: Number(cluster.rejected_groups || 0) } }).eq('id', id);
+      return NextResponse.json({ ok: true, done: false, phase: opportunityIds.length ? 'competition' : 'finish', problems: cluster.problems || 0, opportunities: cluster.opportunities || 0, rejected_groups: cluster.rejected_groups || 0 });
+    }
+
+    if (m.phase === 'competition') {
+      const opportunityIds: string[] = Array.isArray(m.opportunity_ids) ? m.opportunity_ids : [];
+      const index = Number(m.competition_index || 0);
+      if (index >= opportunityIds.length) {
+        await c.from('agent_runs').update({ status: 'running', metadata: { ...m, phase: 'finish', competition_complete: true } }).eq('id', id);
+        return NextResponse.json({ ok: true, done: false, phase: 'finish', message: 'Competition research complete.' });
+      }
+      const opportunityId = opportunityIds[index];
+      const result = await internalPost(request, '/api/competition', { opportunity_id: opportunityId });
+      await c.from('agent_runs').update({ status: 'running', metadata: { ...m, competition_index: index + 1, competition_results: [...(Array.isArray(m.competition_results) ? m.competition_results : []), { opportunity_id: opportunityId, found: Number(result.found || 0) }] } }).eq('id', id);
+      return NextResponse.json({ ok: true, done: false, phase: index + 1 >= opportunityIds.length ? 'finish' : 'competition', competition: { opportunity_id: opportunityId, found: result.found || 0 }, progress: index + 1, total: opportunityIds.length });
     }
 
     if (m.phase === 'finish') {
