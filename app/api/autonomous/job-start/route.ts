@@ -14,14 +14,17 @@ export async function POST(request: NextRequest) {
 
   let topic: any;
   try { topic = await pickTopic(); } catch (e: any) { return NextResponse.json({ error: e?.message || 'Could not choose a research direction' }, { status: 503 }); }
-  if (!topic?.topic) return NextResponse.json({ error: 'No research topic is available' }, { status: 503 });
+  if (!topic?.topic) return NextResponse.json({ error: 'No research topic is available. The topic queue could not be replenished.' }, { status: 503 });
 
-  const sources = ['reddit', 'web', 'github', ...(process.env.X_BEARER_TOKEN ? ['x'] : [])];
-  const metadata = { version: 6, autonomous: true, phase: 'discover', source_index: 0, sources, topic_id: topic.id, analyzed_count: 0, analysis_cap: 20, clustered: false, enriched: [] };
+  // The user explicitly starts a run with one click. No Vercel cron is involved.
+  // X is always part of the source plan: the collector uses the X API when a
+  // bearer token exists and a public x.com search fallback otherwise.
+  const sources = ['reddit', 'x', 'web', 'github'];
+  const metadata = { version: 7, autonomous: true, phase: 'discover', source_index: 0, sources, topic_id: topic.id, analyzed_count: 0, analysis_cap: 24, clustered: false, enriched: [] };
   const { data: run, error } = await c.from('agent_runs').insert({ kind: 'discovery_cycle', status: 'running', topic: topic.topic, metadata }).select('id').single();
   if (error || !run) return NextResponse.json({ error: error?.message || 'Could not create agent run' }, { status: 500 });
 
-  const { data: master, error: masterError } = await c.from('discovery_runs').insert({ query: topic.topic, status: 'running', sources, metadata: { autonomous_agent_run_id: run.id, version: 6, topic_metadata: topic.metadata || {} } }).select('id').single();
+  const { data: master, error: masterError } = await c.from('discovery_runs').insert({ query: topic.topic, status: 'running', sources, metadata: { autonomous_agent_run_id: run.id, version: 7, topic_metadata: topic.metadata || {} } }).select('id').single();
   if (masterError || !master) {
     await c.from('agent_runs').update({ status: 'error', error: masterError?.message || 'Could not create research run', completed_at: new Date().toISOString() }).eq('id', run.id);
     return NextResponse.json({ error: masterError?.message || 'Could not create research run' }, { status: 500 });
