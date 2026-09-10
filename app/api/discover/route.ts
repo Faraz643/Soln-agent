@@ -1,51 +1,7 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
-
-const headers = { Accept: 'application/vnd.github+json', 'User-Agent': 'Soln-Agent', 'X-GitHub-Api-Version': '2022-11-28' };
-const db = () => createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!, { auth: { persistSession: false, autoRefreshToken: false } });
-const clean = (s: string) => s.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '').slice(0, 12000);
-
-async function github(query: string) {
-  const q = encodeURIComponent(`${query} is:issue is:open`);
-  const r = await fetch(`https://api.github.com/search/issues?q=${q}&sort=updated&order=desc&per_page=25`, { headers, cache: 'no-store' });
-  if (!r.ok) return [];
-  const j = await r.json();
-  return (j.items || []).map((i: any) => ({ source:'github', external_id:String(i.id), url:i.html_url, title:i.title, content:i.body || '', published_at:i.created_at, metadata:{repository:i.repository_url, labels:(i.labels||[]).map((x:any)=>x.name), comments:i.comments, reactions:i.reactions?.total_count||0, query} }));
-}
-
-async function reddit(query: string) {
-  const u = `https://www.reddit.com/search.json?q=${encodeURIComponent(query)}&sort=new&t=month&limit=25&raw_json=1`;
-  const r = await fetch(u, { headers:{'User-Agent':'Soln-Agent/1.0 demand-research'}, cache:'no-store' });
-  if (!r.ok) return [];
-  const j = await r.json();
-  return (j.data?.children || []).map((x:any) => { const p=x.data; return { source:'reddit', external_id:String(p.id), url:`https://www.reddit.com${p.permalink}`, title:p.title || '', content:[p.title,p.selftext].filter(Boolean).join('\n\n'), published_at:p.created_utc ? new Date(p.created_utc*1000).toISOString() : null, metadata:{subreddit:p.subreddit, score:p.score, comments:p.num_comments, author:p.author, query} }; });
-}
-
-async function web(query: string) {
-  const r = await fetch(`https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`, { headers:{'User-Agent':'Mozilla/5.0 Soln-Agent'}, cache:'no-store' });
-  if (!r.ok) return [];
-  const html = await r.text();
-  const out:any[]=[]; const re=/<a[^>]+class="result__a"[^>]+href="([^"]+)"[^>]*>(.*?)<\/a>[\s\S]*?<a[^>]+class="result__snippet"[^>]*>(.*?)<\/a>/g;
-  let m; while((m=re.exec(html)) && out.length<20){ const strip=(s:string)=>s.replace(/<[^>]+>/g,'').replace(/&amp;/g,'&').replace(/&#x27;/g,"'").trim(); out.push({source:'web',external_id:m[1],url:m[1],title:strip(m[2]),content:strip(m[3]),published_at:null,metadata:{query,engine:'duckduckgo'}}); }
-  return out;
-}
-
-export async function POST(request: NextRequest) {
-  const secret=process.env.INGEST_SECRET; if(!secret || request.headers.get('authorization')!==`Bearer ${secret}`) return NextResponse.json({error:'Unauthorized'},{status:401});
-  const body=await request.json().catch(()=>null); const query=String(body?.query||'').trim(); if(query.length<3) return NextResponse.json({error:'query is required'},{status:400});
-  const sources=Array.isArray(body?.sources)&&body.sources.length ? body.sources : ['reddit','github','web'];
-  const runDb=db(); const {data:run,error:runError}=await runDb.from('discovery_runs').insert({query,status:'running',sources}).select('id').single(); if(runError) return NextResponse.json({error:runError.message},{status:500});
-  try {
-    const batches=await Promise.all([sources.includes('github')?github(query):[],sources.includes('reddit')?reddit(query):[],sources.includes('web')?web(`${query} problem OR complaint OR workaround OR "looking for"`):[]]);
-    const documents=batches.flat(); const bySource:any={}; for(const d of documents){bySource[d.source]??=[];bySource[d.source].push(d);}
-    let inserted=0;
-    for(const [type,docs] of Object.entries(bySource)){
-      const name=type==='github'?'GitHub':type==='reddit'?'Reddit':'Web Search';
-      const {data:src,error:se}=await runDb.from('sources').upsert({name,type,enabled:true,last_collected_at:new Date().toISOString(),last_error:null},{onConflict:'name'}).select('id').single(); if(se) throw se;
-      const rows=(docs as any[]).map(d=>({source_id:src.id,external_id:d.external_id,url:d.url||null,title:d.title||null,content:clean(d.content||''),published_at:d.published_at||null,metadata:d.metadata||{}}));
-      const {data:ins,error:ie}=await runDb.from('raw_documents').upsert(rows,{onConflict:'source_id,external_id',ignoreDuplicates:true}).select('id'); if(ie) throw ie; inserted+=ins?.length||0;
-    }
-    await runDb.from('discovery_runs').update({status:'completed',signals_collected:documents.length,completed_at:new Date().toISOString()}).eq('id',run.id);
-    return NextResponse.json({ok:true,run_id:run.id,query,sources,signals_collected:documents.length,inserted});
-  } catch(e:any) { await runDb.from('discovery_runs').update({status:'error',error:e?.message||'Discovery failed',completed_at:new Date().toISOString()}).eq('id',run.id); return NextResponse.json({error:e?.message||'Discovery failed',run_id:run.id},{status:500}); }
-}
+import {NextRequest,NextResponse} from 'next/server';import {createClient} from '@supabase/supabase-js';import {createServerClient} from '@supabase/ssr';import {cookies} from 'next/headers';
+const headers={Accept:'application/vnd.github+json','User-Agent':'Soln-Agent','X-GitHub-Api-Version':'2022-11-28'};const db=()=>createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!,process.env.SUPABASE_SERVICE_ROLE_KEY!,{auth:{persistSession:false,autoRefreshToken:false}});const clean=(s:string)=>s.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g,'').slice(0,12000);
+async function authorized(req:NextRequest){const secret=process.env.INGEST_SECRET;if(secret&&req.headers.get('authorization')===`Bearer ${secret}`)return true;try{const cs=await cookies();const s=createServerClient(process.env.NEXT_PUBLIC_SUPABASE_URL!,process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,{cookies:{getAll:()=>cs.getAll(),setAll:()=>{}}});return !!(await s.auth.getUser()).data.user}catch{return false}}
+async function github(query:string){const q=encodeURIComponent(`${query} is:issue is:open`),r=await fetch(`https://api.github.com/search/issues?q=${q}&sort=updated&order=desc&per_page=25`,{headers,cache:'no-store'});if(!r.ok)return[];const j=await r.json();return(j.items||[]).map((i:any)=>({source:'github',external_id:String(i.id),url:i.html_url,title:i.title,content:i.body||'',published_at:i.created_at,metadata:{repository:i.repository_url,labels:(i.labels||[]).map((x:any)=>x.name),comments:i.comments,reactions:i.reactions?.total_count||0,query}}))}
+async function reddit(query:string){const r=await fetch(`https://www.reddit.com/search.json?q=${encodeURIComponent(query)}&sort=new&t=month&limit=25&raw_json=1`,{headers:{'User-Agent':'Soln-Agent/1.0 demand-research'},cache:'no-store'});if(!r.ok)return[];const j=await r.json();return(j.data?.children||[]).map((x:any)=>{const p=x.data;return{source:'reddit',external_id:String(p.id),url:`https://www.reddit.com${p.permalink}`,title:p.title||'',content:[p.title,p.selftext].filter(Boolean).join('\n\n'),published_at:p.created_utc?new Date(p.created_utc*1000).toISOString():null,metadata:{subreddit:p.subreddit,score:p.score,comments:p.num_comments,author:p.author,query}}})}
+async function web(query:string){const r=await fetch(`https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`,{headers:{'User-Agent':'Mozilla/5.0 Soln-Agent'},cache:'no-store'});if(!r.ok)return[];const html=await r.text(),out:any[]=[];const re=/<a[^>]+class="result__a"[^>]+href="([^"]+)"[^>]*>(.*?)<\/a>[\s\S]*?<a[^>]+class="result__snippet"[^>]*>(.*?)<\/a>/g;let m;while((m=re.exec(html))&&out.length<20){const strip=(s:string)=>s.replace(/<[^>]+>/g,'').replace(/&amp;/g,'&').replace(/&#x27;/g,"'").trim();out.push({source:'web',external_id:m[1],url:m[1],title:strip(m[2]),content:strip(m[3]),published_at:null,metadata:{query,engine:'duckduckgo'}})}return out}
+export async function POST(request:NextRequest){if(!(await authorized(request)))return NextResponse.json({error:'Unauthorized'},{status:401});const body=await request.json().catch(()=>null),query=String(body?.query||'').trim();if(query.length<3)return NextResponse.json({error:'query is required'},{status:400});const sources=Array.isArray(body?.sources)&&body.sources.length?body.sources:['reddit','github','web'],c=db(),{data:run,error:re}=await c.from('discovery_runs').insert({query,status:'running',sources}).select('id').single();if(re)return NextResponse.json({error:re.message},{status:500});try{const batches=await Promise.all([sources.includes('github')?github(query):[],sources.includes('reddit')?reddit(query):[],sources.includes('web')?web(`${query} problem OR complaint OR workaround OR "looking for"`):[]]),documents=batches.flat(),by:any={};for(const d of documents){by[d.source]??=[];by[d.source].push(d)}let inserted=0;for(const[type,docs]of Object.entries(by)){const name=type==='github'?'GitHub':type==='reddit'?'Reddit':'Web Search',src=await c.from('sources').upsert({name,type,enabled:true,last_collected_at:new Date().toISOString(),last_error:null},{onConflict:'name'}).select('id').single();if(src.error)throw src.error;const rows=(docs as any[]).map(d=>({source_id:src.data.id,external_id:d.external_id,url:d.url||null,title:d.title||null,content:clean(d.content||''),published_at:d.published_at||null,metadata:d.metadata||{}})),ins=await c.from('raw_documents').upsert(rows,{onConflict:'source_id,external_id',ignoreDuplicates:true}).select('id');if(ins.error)throw ins.error;inserted+=ins.data?.length||0}await c.from('discovery_runs').update({status:'completed',signals_collected:documents.length,completed_at:new Date().toISOString()}).eq('id',run.id);return NextResponse.json({ok:true,run_id:run.id,query,sources,signals_collected:documents.length,inserted})}catch(e:any){await c.from('discovery_runs').update({status:'error',error:e?.message||'Discovery failed',completed_at:new Date().toISOString()}).eq('id',run.id);return NextResponse.json({error:e?.message||'Discovery failed',run_id:run.id},{status:500})}}
