@@ -4,7 +4,7 @@
   },
   "crons": [
     {
-      "path": "/api/autonomous/cron",
+      "path": "/api/autonomous/cron-v3",
       "schedule": "0 */6 * * *"
     }
   ]
