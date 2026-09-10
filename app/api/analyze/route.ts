@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import { DEMAND_SYSTEM_PROMPT, normalizeDemandAnalysis } from '@/lib/demand-intelligence';
 
-const clamp = (n: unknown) => Math.max(0, Math.min(100, Number(n) || 0));
 const json = (v: unknown) => typeof v === 'object' && v !== null ? v as Record<string, unknown> : {};
 
 async function githubState(url: string | null) {
@@ -21,21 +21,25 @@ async function githubState(url: string | null) {
       hasPr = Array.isArray(timeline) && timeline.some((x: any) => x?.event === 'cross-referenced' && String(x?.source?.issue?.html_url || '').includes('/pull/'));
     }
     const closed = issue.state === 'closed';
-    return { isOpen: !closed, hasPr, isSolved: closed || hasPr, reason: closed ? `GitHub issue is ${issue.state_reason || 'closed'}` : hasPr ? 'A pull request is linked from the issue timeline' : null };
-  } catch { return { isOpen: null, hasPr: false, isSolved: false, reason: null }; }
+    return { isOpen: !closed, hasPr, isSolved: closed, reason: closed ? `GitHub issue is ${issue.state_reason || 'closed'}` : null };
+  } catch {
+    return { isOpen: null, hasPr: false, isSolved: false, reason: null };
+  }
 }
 
-async function callGemini(input: { title: string; content: string; source: string; metadata: Record<string, unknown> }) {
+async function callGemini(input: { title: string; content: string; source: string; metadata: Record<string, unknown>; lifecycle: Record<string, unknown> }) {
   const key = process.env.GEMINI_API_KEY;
   if (!key) throw new Error('GEMINI_API_KEY is not configured');
-  const model = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
-  const system = `You are Soln-Agent's strict opportunity classifier. Return ONLY valid JSON. Never invent payment, bounty, demand, or status. Reject spam, announcements, tutorials, generic discussion, vague ideas and insufficient evidence. A paid opportunity requires explicit payment/bounty evidence. Score pain, demand, payment likelihood and opportunity from 0-100. Return exactly these fields: is_problem:boolean,is_paid:boolean,reward_amount:number|null,currency:string|null,difficulty:string|null,technologies:string[],problem_summary:string,opportunity_summary:string,demand_score:number,payment_score:number,pain_score:number,opportunity_score:number,confidence_score:number,rejection_reason:string|null,is_solved:boolean,has_pr:boolean.`;
+  const model = process.env.GEMINI_MODEL || 'gemini-3.1-flash-lite';
   const payload = JSON.stringify(input).slice(0, 30000);
   const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(key)}`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ system_instruction: { parts: [{ text: system }] }, contents: [{ role: 'user', parts: [{ text: payload }] }], generationConfig: { temperature: 0, responseMimeType: 'application/json' } }),
+    body: JSON.stringify({ system_instruction: { parts: [{ text: DEMAND_SYSTEM_PROMPT }] }, contents: [{ role: 'user', parts: [{ text: payload }] }], generationConfig: { temperature: 0, responseMimeType: 'application/json' } }),
   });
-  if (!res.ok) throw new Error(`Gemini API returned ${res.status}`);
+  if (!res.ok) {
+    const detail = await res.text().catch(() => '');
+    throw new Error(`Gemini API returned ${res.status}${detail ? `: ${detail.slice(0, 300)}` : ''}`);
+  }
   const data = await res.json();
   const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
   if (!text) throw new Error('Gemini returned no analysis');
@@ -68,16 +72,22 @@ export async function POST(request: NextRequest) {
       const meta = json(doc.metadata);
       const gh = source === 'github' ? await githubState(doc.url) : { isOpen: null, hasPr: false, isSolved: false, reason: null };
       const stale = !!doc.published_at && Date.now() - new Date(doc.published_at).getTime() > 180 * 86400000;
-      const { data: ai, model } = await callGemini({ title: doc.title || '', content: doc.content || '', source, metadata: meta });
+      const { data: aiRaw, model } = await callGemini({ title: doc.title || '', content: doc.content || '', source, metadata: meta, lifecycle: gh });
+      const ai = normalizeDemandAnalysis(aiRaw, source);
       const isOpen = source === 'github' && gh.isOpen !== null ? gh.isOpen : null;
-      const isSolved = gh.isSolved || ai.is_solved === true;
-      const hasPr = gh.hasPr || ai.has_pr === true;
-      const confidence = clamp(ai.confidence_score);
-      const opportunity = clamp(ai.opportunity_score);
-      const hardReject = !ai.is_problem || isSolved || (stale && source === 'github') || confidence < 70 || opportunity < 60;
-      const status = hardReject ? 'rejected' : (ai.is_paid || opportunity >= 75 ? 'verified' : 'candidate');
-      const rejectionReason = hardReject ? (gh.reason || ai.rejection_reason || (stale ? 'Older than 180 days' : confidence < 70 ? 'Low confidence' : 'Does not meet strict opportunity threshold')) : null;
-      const row = { raw_document_id: doc.id, status, is_problem: !!ai.is_problem, is_paid: !!ai.is_paid, reward_amount: ai.reward_amount == null ? null : Number(ai.reward_amount), currency: ai.currency || null, is_open: isOpen, has_pr: hasPr, is_solved: isSolved, is_stale: stale, difficulty: ai.difficulty || null, technologies: Array.isArray(ai.technologies) ? ai.technologies.slice(0, 20) : [], problem_summary: ai.problem_summary || null, opportunity_summary: ai.opportunity_summary || null, opportunity_score: opportunity, confidence_score: confidence, rejection_reason: rejectionReason, evidence: { source, metadata: meta, github: gh, model_scores: { pain: clamp(ai.pain_score), demand: clamp(ai.demand_score), payment: clamp(ai.payment_score) } }, model, analyzed_at: new Date().toISOString(), updated_at: new Date().toISOString() };
+      const isSolved = gh.isSolved || ai.is_solved;
+      const hasPr = gh.hasPr || ai.has_pr;
+      const status = !ai.is_problem ? 'rejected' : ai.confidence_score < 45 ? 'candidate' : ai.opportunity_score >= 75 ? 'verified' : 'candidate';
+      const row = {
+        raw_document_id: doc.id, status, is_problem: ai.is_problem, is_paid: ai.is_paid, reward_amount: ai.reward_amount, currency: ai.currency,
+        is_open: isOpen, has_pr: hasPr, is_solved: isSolved, is_stale: stale, difficulty: ai.difficulty, technologies: ai.technologies,
+        problem_summary: ai.problem_summary || null, opportunity_summary: ai.opportunity_summary || null, opportunity_score: ai.opportunity_score,
+        confidence_score: ai.confidence_score, rejection_reason: status === 'rejected' ? (ai.rejection_reason || 'Not a meaningful problem signal') : null,
+        evidence: { source, metadata: meta, lifecycle: gh, model_scores: { pain: ai.pain_score, demand: ai.demand_score, payment: ai.payment_score, evidence_quality: ai.evidence_quality, urgency: ai.urgency_score, competition: ai.competition_score, workaround: ai.workaround_score }, customer_segments: ai.customer_segments, ai_evidence: ai.evidence },
+        model, analyzed_at: new Date().toISOString(), updated_at: new Date().toISOString(), pain_score: ai.pain_score, demand_score: ai.demand_score,
+        payment_score: ai.payment_score, evidence_quality: ai.evidence_quality, urgency_score: ai.urgency_score, competition_score: ai.competition_score,
+        workaround_score: ai.workaround_score, customer_segments: ai.customer_segments,
+      };
       const { data: saved, error: saveError } = await db.from('document_analyses').upsert(row, { onConflict: 'raw_document_id' }).select().single();
       if (saveError) throw saveError;
       results.push(saved);
