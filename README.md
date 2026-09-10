@@ -1,24 +1,52 @@
 # Soln-Agent
 
-Product Demand Intelligence platform.
+Product Demand Intelligence platform. Soln-Agent starts from a market/topic query, collects public demand signals, extracts real customer problems, clusters repeated evidence, measures demand/pain/urgency/willingness-to-pay, researches competition, ranks opportunities and generates validation/MVP plans.
 
-Soln-Agent collects public demand signals, extracts the underlying customer problem, measures pain/demand/willingness-to-pay/evidence, and ranks product opportunities. It is **not** a bounty hunter: GitHub is a demand-signal source, not a requirement for monetary rewards.
-
-## Current architecture
+## End-to-end architecture
 
 ```text
-GitHub demand signals
+Topic / market query
         ↓
-      n8n
+Discovery engine
         ↓
-/api/ingest → Supabase raw_documents
+Reddit + GitHub + Web search
         ↓
-/api/analyze → Gemini evidence-first analysis
+raw_documents
+        ↓
+Gemini signal analysis
         ↓
 document_analyses
         ↓
-Dashboard: Overview / Problems / Opportunities / Trends / Sources
+Problem clustering
+        ↓
+problems + evidence + trend_snapshots
+        ↓
+Opportunity engine
+        ↓
+opportunities
+        ↓
+Competition intelligence
+        ↓
+competitors
+        ↓
+Validation agent
+        ↓
+landing page + pricing hypothesis + experiment
+        ↓
+MVP specification agent
 ```
+
+## APIs
+
+- `POST /api/discover` — collect Reddit, GitHub and public web signals for a topic.
+- `POST /api/ingest` — persist normalized raw signals (used by n8n and integrations).
+- `POST /api/analyze` — analyze pending/raw signals with Gemini.
+- `POST /api/cluster` — consolidate signals into recurring problems and opportunities and create evidence/trend snapshots.
+- `POST /api/competition` — research public competitor/alternative results for an opportunity.
+- `POST /api/validate` — generate a product concept, landing-page draft, pricing hypothesis and validation experiment.
+- `POST /api/mvp` — generate a grounded MVP specification and engineering plan.
+
+All machine-to-machine endpoints require `Authorization: Bearer $INGEST_SECRET`.
 
 ## Environment
 
@@ -28,8 +56,8 @@ Dashboard: Overview / Problems / Opportunities / Trends / Sources
 - `INGEST_SECRET`
 - `GEMINI_API_KEY`
 - `GEMINI_MODEL` (recommended: `gemini-3.1-flash-lite`)
-- `N8N_INGEST_URL`
-- `N8N_BASE_URL` is optional until n8n is hosted publicly.
+- `N8N_INGEST_URL` (optional integration URL)
+- `N8N_BASE_URL` (optional)
 
 Never commit real secrets.
 
@@ -41,47 +69,28 @@ Apply in order:
 2. `supabase/migrations/0002_phase2_ingestion.sql`
 3. `supabase/migrations/0003_phase3_analysis.sql`
 4. `supabase/migrations/202609100001_product_demand_intelligence.sql`
-
-The final migration adds pain, demand, willingness-to-pay, evidence quality, urgency, competition, workaround and customer-segment fields.
+5. `supabase/migrations/0004_intelligence_platform.sql`
 
 ## n8n
 
-Import:
+- `n8n/soln-agent-phase2.json` — legacy GitHub collection workflow.
+- `n8n/soln-agent-phase3.json` — legacy analysis workflow.
+- `n8n/soln-agent-autonomous.json` — topic-driven Reddit + GitHub + web discovery followed by analysis and clustering every 6 hours.
 
-- `n8n/soln-agent-phase2.json` — GitHub demand collection every 6 hours.
-- `n8n/soln-agent-phase3.json` — AI demand analysis every 6 hours.
-
-Replace `REPLACE_WITH_INGEST_SECRET` in the n8n HTTP nodes with the same `INGEST_SECRET` stored in Vercel.
-
-Reddit is intentionally not part of the initial active pipeline. It can be added later as a separate source.
+Replace `REPLACE_WITH_INGEST_SECRET` in imported workflows with the same secret stored in Vercel. Keep the autonomous workflow inactive until its topics and credentials are reviewed.
 
 ## Intelligence model
 
-Each signal is evaluated on:
+Payment means willingness-to-pay/economic evidence around a problem, not a GitHub bounty. Absence of payment evidence does not reject a problem. The system separates observed evidence from inference and stores source/lifecycle context.
 
-- Problem reality
-- Pain
-- Demand
-- Willingness to pay
-- Current workarounds
-- Urgency
-- Competition
-- Evidence quality
-- Customer segment
-- Product opportunity
-- Confidence
+## Phase 1–9 coverage
 
-Payment evidence is **one demand signal**. It does not turn a GitHub issue into a bounty and its absence does not automatically reject a problem.
-
-## Roadmap
-
-1. Foundation — complete
-2. Source ingestion — GitHub initial source
-3. AI signal analysis — Gemini
-4. Problem clustering — semantic grouping
-5. Opportunity intelligence — product recommendations
-6. Trends — demand acceleration and emerging themes
-7. Intelligence dashboard — live decision workspace
-8. More sources — Reddit, web, reviews, communities
-9. Validation engine — cross-source evidence and confidence
-10. Product-discovery agent — answer high-level market questions from accumulated evidence
+1. Foundation — Next.js, Supabase, n8n, authentication-ready architecture.
+2. Data Collection — Reddit, GitHub, web search, scheduled n8n workflow, raw storage.
+3. Problem Detection — AI extraction, duplicate consolidation, clustering, evidence history.
+4. Demand Intelligence — demand, growth snapshots, pain, urgency, solution intent/workarounds, willingness-to-pay.
+5. Competition Intelligence — public alternatives, pricing/review/complaint research surface.
+6. Opportunity Engine — scored and ranked opportunities with evidence.
+7. Dashboard — overview, problems, opportunities, trends, sources and detailed opportunity views.
+8. Validation Agent — product concept, landing page draft, pricing hypothesis and validation experiment.
+9. Autonomous Product Discovery — scheduled discovery/analyze/cluster pipeline plus validation/MVP agents and machine-readable results for notification/agent workflows.
