@@ -22,61 +22,34 @@ const FALLBACK_LENSES = [
   'new or emerging workflows created by AI, regulation, platforms or changing consumer behavior that lack good tooling',
 ];
 
-async function generateWithAI(existing: string[], recent: string[]) {
-  const key = process.env.GEMINI_API_KEY;
-  if (!key) return [];
+async function generateWithAI(recent: string[]) {
+  const key = process.env.GEMINI_API_KEY; if (!key) return [];
   const prompt = [
     'You are the open-minded discovery engine for Soln-Agent.',
-    'Your mission is NOT to choose a startup category. Your mission is to generate search lenses that help us discover unexpected real-world problems anywhere on the public internet.',
+    'Your mission is NOT to choose a startup category. Generate search lenses that help discover unexpected real-world problems anywhere on the public internet.',
     'Think like a relentless product researcher: follow evidence, not industry categories.',
     '',
-    'Generate 14 highly diverse research lenses. Each lens should describe a concrete type of real customer pain, behavior, workaround, failure, unmet request, expense, delay, or repeated frustration that people are likely to discuss publicly.',
+    'Generate 14 highly diverse research lenses. Each lens must describe a concrete customer pain, behavior, workaround, failure, unmet request, expense, delay, or repeated frustration that people are likely to discuss publicly.',
     'Do not output startup ideas, products, industries, technologies, or market-size claims.',
     'Avoid broad labels such as freelancing, ecommerce, AI, productivity, healthcare, education or SaaS.',
     'Prefer signals such as: "I keep having to...", "is there a tool...", "I wish...", "we still use a spreadsheet...", "this costs us...", "we pay someone to...", "nothing works for...", "I am looking for an alternative...", repeated feature requests, manual workarounds and complaints about expensive or fragmented software.',
-    'Cover different customer types and workflows. Include some B2B, consumer, local business, professional, creator, operational, financial and emerging-workflow problems without forcing those categories.',
+    'Cover different customer types and workflows without forcing categories. Include both obvious and surprising problem spaces.',
     'The lens must be useful for Reddit, X, web discussions and GitHub issue/search discovery.',
-    `Already explored recently: ${recent.slice(0, 30).join(' | ') || 'none'}`,
-    `Existing research directions to avoid repeating: ${existing.slice(0, 40).join(' | ') || 'none'}`,
+    `Recently explored lenses to avoid repeating: ${recent.slice(0, 50).join(' | ') || 'none'}`,
     '',
     'Return ONLY JSON: {"lenses":["..."]}',
   ].join('\n');
   try {
-    const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model()}:generateContent?key=${encodeURIComponent(key)}`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: prompt }] }], generationConfig: { temperature: 0.85, responseMimeType: 'application/json' } }),
-      cache: 'no-store',
-    });
-    if (!r.ok) return [];
-    const j = await r.json();
-    const text = j.candidates?.[0]?.content?.parts?.[0]?.text;
-    if (!text) return [];
-    const parsed = JSON.parse(text);
+    const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model()}:generateContent?key=${encodeURIComponent(key)}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: prompt }] }], generationConfig: { temperature: 0.9, responseMimeType: 'application/json' } }), cache: 'no-store' });
+    if (!r.ok) return []; const j = await r.json(); const text = j.candidates?.[0]?.content?.parts?.[0]?.text; if (!text) return []; const parsed = JSON.parse(text);
     return Array.isArray(parsed.lenses) ? parsed.lenses.map(String).map((x: string) => x.trim()).filter((x: string) => x.length >= 35 && x.length <= 220) : [];
-  } catch {
-    return [];
-  }
+  } catch { return []; }
 }
 
 export async function buildOpenResearchPlan() {
-  const c = db();
-  const [{ data: runs }, { data: topics }] = await Promise.all([
-    c.from('agent_runs').select('topic,metadata').order('started_at', { ascending: false }).limit(30),
-    c.from('discovery_topics').select('topic').order('created_at', { ascending: false }).limit(60),
-  ]);
-  const recent = (runs || []).map((r: any) => String(r.topic || '')).filter(Boolean);
-  const existing = (topics || []).map((r: any) => String(r.topic || '')).filter(Boolean);
-  const ai = await generateWithAI(existing, recent);
-  const pool = [...ai, ...FALLBACK_LENSES];
-  const seen = new Set<string>();
-  const plan: string[] = [];
-  for (const raw of pool) {
-    const q = raw.replace(/\s+/g, ' ').trim();
-    const key = q.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
-    if (!key || seen.has(key)) continue;
-    if (recent.some((r) => r.toLowerCase() === q.toLowerCase())) continue;
-    seen.add(key); plan.push(q);
-    if (plan.length >= 12) break;
-  }
+  const c = db(); const { data: runs } = await c.from('agent_runs').select('topic,metadata').order('started_at', { ascending: false }).limit(30);
+  const recent = (runs || []).flatMap((r: any) => Array.isArray(r.metadata?.research_queries) ? r.metadata.research_queries.map(String) : [String(r.topic || '')]).filter(Boolean);
+  const ai = await generateWithAI(recent); const pool = [...ai, ...FALLBACK_LENSES]; const seen = new Set<string>(); const plan: string[] = [];
+  for (const raw of pool) { const q = raw.replace(/\s+/g, ' ').trim(); const key = q.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim(); if (!key || seen.has(key)) continue; if (recent.some((r) => r.toLowerCase() === q.toLowerCase())) continue; seen.add(key); plan.push(q); if (plan.length >= 12) break; }
   return plan.length ? plan : FALLBACK_LENSES.slice(0, 12);
 }
