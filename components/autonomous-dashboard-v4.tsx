@@ -6,7 +6,7 @@ type Run = { id: string; status: string; topic: string | null; signals_collected
 type Opportunity = { id: string; name: string; description?: string | null; score: number; problem_id?: string; problem?: { title?: string; target_customer?: string; demand_score?: number; pain_score?: number; payment_score?: number } | null; competitor_count?: number; validation_count?: number; evidence_count?: number; paid_evidence_count?: number; source_count?: number };
 type Props = { initialRuns: Run[]; initialTopics: any[] };
 
-const SOURCES = ['Reddit', 'X', 'Web', 'GitHub'];
+const SOURCES = ['Reddit', 'X', 'Web Search', 'GitHub', 'Hacker News', 'Indie Hackers', 'Product Hunt', 'Stack Overflow', 'Quora', 'Trustpilot', 'Google Maps', 'GitHub Discussions', 'YC Discussions', 'Google Trends'];
 
 export function AutonomousDashboard({ initialRuns }: Props) {
   const [runs, setRuns] = useState(initialRuns); const [opportunities, setOpportunities] = useState<Opportunity[]>([]);
