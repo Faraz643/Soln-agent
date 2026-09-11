@@ -140,7 +140,7 @@ export async function POST(req: NextRequest) {
     for (const r of list.slice(0, 50)) {
       await c.from('problem_signals').upsert({ problem_id: pid, raw_document_id: r.raw_document_id, relevance: Math.round((Number(r.opportunity_score || 0) + Number(r.evidence_quality || 0)) / 2), evidence_quality: r.evidence_quality }, { onConflict: 'problem_id,raw_document_id' });
       if (oid) {
-        await c.from('evidence').upsert({ problem_id: pid, opportunity_id: oid, raw_document_id: r.raw_document_id, signal_type: String(r.evidence?.source || 'signal'), strength: r.evidence_quality, excerpt: String(r.evidence?.ai_evidence?.description || r.problem_summary || '').slice(0, 500) }, { onConflict: 'opportunity_id,raw_document_id' });
+        await c.from('evidence').insert({ problem_id: pid, opportunity_id: oid, raw_document_id: r.raw_document_id, signal_type: String(r.evidence?.source || 'signal'), strength: r.evidence_quality, excerpt: String(r.evidence?.ai_evidence?.description || r.problem_summary || '').slice(0, 500) });
       }
       evidence++;
     }
