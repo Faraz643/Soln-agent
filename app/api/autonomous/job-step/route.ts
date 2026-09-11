@@ -39,7 +39,7 @@ export async function POST(request: NextRequest) {
     const masterId = String(m.master_discovery_run_id || '');
     const sources: string[] = Array.isArray(m.sources) ? m.sources : ['reddit', 'x', 'web', 'github'];
     const queries: string[] = Array.isArray(m.research_queries) ? m.research_queries : [];
-    const analysisCap = Math.min(Math.max(Number(m.analysis_cap || 48), 12), 60);
+    const analysisCap = Math.min(Math.max(Number(m.analysis_cap || 60), 12), 60);
 
     if (m.phase === 'discover') {
       if (!masterId) throw new Error('Master discovery run is missing');
@@ -60,11 +60,15 @@ export async function POST(request: NextRequest) {
           return NextResponse.json({ ok: true, done: false, phase: 'analyze', message: 'Open-mind collection complete. Starting evidence analysis.', research_lenses: queries.length });
         }
       }
+
+      // Process several sources in one serverless step. The individual collectors are already
+      // parallelized by /api/discover, so this cuts the number of round trips substantially while
+      // keeping each request bounded by the Vercel function duration.
+      const sourceBatch = sources.slice(sourceIndex, sourceIndex + 3);
       const researchQuery = queries[queryIndex];
-      const source = sources[sourceIndex];
-      const discovery = await internalPost(request, '/api/discover', { query: researchQuery, sources: [source] });
+      const discovery = await internalPost(request, '/api/discover', { query: researchQuery, sources: sourceBatch });
       const childId = String(discovery.run_id || '');
-      if (!childId) throw new Error(`Discovery did not return a run id for ${source}`);
+      if (!childId) throw new Error(`Discovery did not return a run id for ${sourceBatch.join(', ')}`);
       const { data: links, error: linksError } = await c.from('discovery_run_documents').select('raw_document_id').eq('discovery_run_id', childId);
       if (linksError) throw linksError;
       if (links?.length) {
@@ -72,10 +76,11 @@ export async function POST(request: NextRequest) {
         if (copied.error) throw copied.error;
       }
       const totalSignals = Number(current.signals_collected || 0) + Number(discovery.signals_collected || 0);
-      const progress = { ...(meta(m.source_progress)), [`${queryIndex}:${source}`]: Number(discovery.signals_collected || 0) };
-      const nextSource = sourceIndex + 1;
-      await c.from('agent_runs').update({ status: 'running', signals_collected: totalSignals, metadata: { ...m, query_index: queryIndex, source_index: nextSource, source_progress: progress, current_lens: researchQuery, current_source: source } }).eq('id', id);
-      return NextResponse.json({ ok: true, done: false, phase: 'discover', source, lens: researchQuery, lens_index: queryIndex + 1, lenses_total: queries.length, signals_collected: discovery.signals_collected || 0 });
+      const progress = { ...(meta(m.source_progress)) };
+      for (const source of sourceBatch) progress[`${queryIndex}:${source}`] = Number(discovery.source_results?.[source]?.collected || 0);
+      const nextSource = sourceIndex + sourceBatch.length;
+      await c.from('agent_runs').update({ status: 'running', signals_collected: totalSignals, metadata: { ...m, query_index: queryIndex, source_index: nextSource, source_progress: progress, current_lens: researchQuery, current_sources: sourceBatch } }).eq('id', id);
+      return NextResponse.json({ ok: true, done: false, phase: 'discover', source: sourceBatch.join(' + '), lens: researchQuery, lens_index: queryIndex + 1, lenses_total: queries.length, sources_processed: sourceBatch, signals_collected: discovery.signals_collected || 0, source_results: discovery.source_results || {} });
     }
 
     if (m.phase === 'analyze') {
@@ -83,14 +88,24 @@ export async function POST(request: NextRequest) {
       if (linkError) throw linkError;
       const ids = [...new Set((links || []).map((x: any) => x.raw_document_id).filter(Boolean))];
       if (!ids.length) throw new Error('No public evidence was collected');
-      const { data: doneRows, error: doneError } = await c.from('document_analyses').select('raw_document_id,status').in('raw_document_id', ids).in('status', ['rejected', 'candidate', 'verified']);
-      if (doneError) throw doneError;
-      const doneSet = new Set((doneRows || []).map((x: any) => x.raw_document_id));
+      const { data: existing, error: existingError } = await c.from('document_analyses').select('raw_document_id,evidence,status').in('raw_document_id', ids).in('status', ['rejected', 'candidate', 'verified']);
+      if (existingError) throw existingError;
+      // An analysis is reusable only when it was made for the same discovery lens. The same public
+      // document can surface under a different lens on a later run, so global raw_document_id alone
+      // must never silently suppress fresh analysis.
+      const currentDocs = await c.from('raw_documents').select('id,metadata').in('id', ids);
+      if (currentDocs.error) throw currentDocs.error;
+      const topicById = new Map<string, string>();
+      for (const d of currentDocs.data || []) topicById.set(d.id, String(meta(d.metadata).research_topic || '').trim());
+      const doneSet = new Set((existing || []).filter((x: any) => {
+        const evidence = meta(x.evidence);
+        return String(evidence.research_topic || '').trim() && String(evidence.research_topic || '').trim() === (topicById.get(x.raw_document_id) || '');
+      }).map((x: any) => x.raw_document_id));
       if (doneSet.size >= analysisCap) {
         await c.from('agent_runs').update({ status: 'running', metadata: { ...m, phase: 'cluster' } }).eq('id', id);
         return NextResponse.json({ ok: true, done: false, phase: 'cluster', message: `Evidence analysis cap of ${analysisCap} reached.` });
       }
-      const batchSize = Math.min(4, analysisCap - doneSet.size);
+      const batchSize = Math.min(5, analysisCap - doneSet.size);
       const pending = ids.filter((x: string) => !doneSet.has(x)).slice(0, batchSize);
       if (pending.length) {
         const result = await internalPost(request, '/api/analyze', { raw_document_ids: pending, limit: pending.length });
