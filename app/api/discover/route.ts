@@ -3,22 +3,129 @@ import { createHash } from 'crypto';
 import { createClient } from '@supabase/supabase-js';
 import { createServerClient } from '@supabase/ssr';
 import { cookies } from 'next/headers';
+import { buildOpenResearchPlan } from '@/lib/open-discovery';
+import {
+  DiscoverySource, Signal, collectReddit, collectX, collectWeb, collectGitHub,
+  collectHackerNews, collectStackOverflow, collectSite, collectGoogleTrends,
+} from '@/lib/source-connectors';
 
 export const maxDuration = 50;
-const headers = { Accept: 'application/vnd.github+json', 'User-Agent': 'Soln-Agent', 'X-GitHub-Api-Version': '2022-11-28' };
+
 const db = () => createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!, { auth: { persistSession: false, autoRefreshToken: false } });
-const clean = (s: string) => s.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '').slice(0, 12000);
-const STOP_WORDS = new Set(`a an and are as at be been being by can could did do does doing for from had has have having how i if in into is it its me more most my of on or our please problem problems should that the their them they this to was we what when where which who why will with would you your face facing users user people find finding choosing choose looking look need needs needed get getting`.split(' '));
-function topicTerms(query: string) { const terms: string[] = []; for (const word of query.toLowerCase().match(/[a-z0-9][a-z0-9-]{1,}/g) || []) { const w = word.replace(/-+/g, ' '); if (!STOP_WORDS.has(w) && w.length >= 3 && !terms.includes(w)) terms.push(w); } return terms.slice(0, 10); }
-function buildSearchQueries(query: string, source: 'github' | 'reddit' | 'web' | 'x') { const terms = topicTerms(query); const primary = terms.slice(0, 6); const phrase = query.replace(/["']/g, '').trim(); const out = new Set<string>(); const pain = '(problem OR frustrating OR frustrated OR complaint OR workaround OR "looking for" OR "wish there was" OR "anyone else" OR "how do I")'; if (source === 'github') { const since = new Date(Date.now() - 180 * 86400000).toISOString().slice(0, 10); if (primary.length >= 2) out.add(`${primary.slice(0, 4).map(t => `"${t}"`).join(' ')} is:issue is:open updated:>=${since}`); if (primary.length >= 3) out.add(`${primary.slice(0, 5).map(t => `"${t}"`).join(' ')} is:issue is:open ${['bug','feature','request','pain','workflow'].map(x => `"${x}"`).join(' OR ')}`); } else if (source === 'reddit') { if (primary.length >= 2) out.add(`${primary.slice(0, 4).map(t => `"${t}"`).join(' ')} ${pain}`); if (primary.length >= 3) out.add(`"${phrase}" ${pain}`); if (primary.length >= 2) out.add(`${primary.slice(0, 5).join(' ')} "alternative" OR "replace" OR "manual" OR "spreadsheet"`); } else if (source === 'x') { if (primary.length >= 2) out.add(`${primary.slice(0, 4).join(' ')} ("wish there was" OR "looking for" OR frustrated OR "can't find" OR "anyone else" OR workaround) -is:retweet lang:en`); if (primary.length >= 3) out.add(`"${phrase}" (problem OR complaint OR "how do I" OR "need a tool") -is:retweet lang:en`); } else { if (primary.length >= 2) out.add(`"${phrase}" ${pain}`); if (primary.length >= 3) out.add(`${primary.slice(0, 6).join(' ')} (complaints OR frustration OR workaround OR "looking for a tool" OR "alternative to")`); if (primary.length >= 2) out.add(`${primary.slice(0, 5).join(' ')} reviews complaints alternatives pricing`); } return [...out].filter(Boolean).slice(0, 4); }
-function topicKey(query: string) { return createHash('sha1').update(query.trim().toLowerCase()).digest('hex').slice(0, 12); }
-async function authorized(req: NextRequest) { const secret = process.env.INGEST_SECRET; if (secret && req.headers.get('authorization') === `Bearer ${secret}`) return true; try { const cs = await cookies(); const s = createServerClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!, { cookies: { getAll: () => cs.getAll(), setAll: () => {} } }); return !!(await s.auth.getUser()).data.user; } catch { return false; } }
-async function github(query: string, researchQuery: string) { const r = await fetch(`https://api.github.com/search/issues?q=${encodeURIComponent(query)}&sort=updated&order=desc&per_page=20`, { headers, cache: 'no-store' }); if (!r.ok) return []; const j = await r.json(); return (j.items || []).map((i: any) => ({ source: 'github', external_id: String(i.id), url: i.html_url, title: i.title, content: i.body || '', published_at: i.created_at, metadata: { repository: i.repository_url, labels: (i.labels || []).map((x: any) => x.name), comments: i.comments, reactions: i.reactions?.total_count || 0, author: i.user?.login, query: researchQuery, source_query: query, updated_at: i.updated_at } })); }
-async function reddit(query: string, researchQuery: string) { const r = await fetch(`https://www.reddit.com/search.json?q=${encodeURIComponent(query)}&sort=new&t=year&limit=25&raw_json=1`, { headers: { 'User-Agent': 'Soln-Agent/1.0 demand-research' }, cache: 'no-store' }); if (!r.ok) return []; const j = await r.json(); return (j.data?.children || []).map((x: any) => { const p = x.data; return { source: 'reddit', external_id: String(p.id), url: `https://www.reddit.com${p.permalink}`, title: p.title || '', content: [p.title, p.selftext].filter(Boolean).join('\n\n'), published_at: p.created_utc ? new Date(p.created_utc * 1000).toISOString() : null, metadata: { subreddit: p.subreddit, score: p.score, comments: p.num_comments, author: p.author, query: researchQuery, source_query: query } }; }); }
-async function web(query: string, researchQuery: string) { const r = await fetch(`https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`, { headers: { 'User-Agent': 'Mozilla/5.0 Soln-Agent' }, cache: 'no-store' }); if (!r.ok) return []; const html = await r.text(); const out: any[] = []; const re = /<a[^>]+class="result__a"[^>]+href="([^"]+)"[^>]*>(.*?)<\/a>[\s\S]*?<a[^>]+class="result__snippet"[^>]*>(.*?)<\/a>/g; let m; while ((m = re.exec(html)) && out.length < 15) { const strip = (s: string) => s.replace(/<[^>]+>/g, '').replace(/&amp;/g, '&').replace(/&#x27;/g, "'").replace(/&quot;/g, '"').trim(); out.push({ source: 'web', external_id: m[1], url: m[1], title: strip(m[2]), content: strip(m[3]), published_at: null, metadata: { query: researchQuery, source_query: query, engine: 'duckduckgo' } }); } return out; }
-async function xSearch(query: string, researchQuery: string) { const token = process.env.X_BEARER_TOKEN; if (token) { const url = `https://api.x.com/2/tweets/search/recent?query=${encodeURIComponent(query)}&max_results=25&tweet.fields=created_at,public_metrics,author_id&expansions=author_id&user.fields=username,name`; const r = await fetch(url, { headers: { Authorization: `Bearer ${token}` }, cache: 'no-store' }); if (r.ok) { const j = await r.json(); const users = new Map((j.includes?.users || []).map((u: any) => [u.id, u])); return (j.data || []).map((t: any) => { const u: any = users.get(t.author_id); return { source: 'x', external_id: String(t.id), url: `https://x.com/${u?.username || 'i'}/status/${t.id}`, title: u?.name ? `@${u.username} — ${u.name}` : 'X post', content: t.text || '', published_at: t.created_at || null, metadata: { author_id: t.author_id, username: u?.username, likes: t.public_metrics?.like_count || 0, replies: t.public_metrics?.reply_count || 0, reposts: t.public_metrics?.retweet_count || 0, query: researchQuery, source_query: query, collection_method: 'x-api' } }; }); } } const r = await fetch(`https://html.duckduckgo.com/html/?q=${encodeURIComponent(`site:x.com ${query}`)}`, { headers: { 'User-Agent': 'Mozilla/5.0 Soln-Agent' }, cache: 'no-store' }); if (!r.ok) return []; const html = await r.text(); const out: any[] = []; const re = /<a[^>]+class="result__a"[^>]+href="([^"]+)"[^>]*>(.*?)<\/a>[\s\S]*?<a[^>]+class="result__snippet"[^>]*>(.*?)<\/a>/g; let m; while ((m = re.exec(html)) && out.length < 12) { const strip = (s: string) => s.replace(/<[^>]+>/g, '').replace(/&amp;/g, '&').replace(/&#x27;/g, "'").replace(/&quot;/g, '"').trim(); const url = strip(m[1]); if (!url.includes('x.com/')) continue; out.push({ source: 'x', external_id: url, url, title: strip(m[2]) || 'X post', content: strip(m[3]), published_at: null, metadata: { query: researchQuery, source_query: query, engine: 'duckduckgo-x', collection_method: 'public-search' } }); } return out; }
+const clean = (s: string) => String(s || '').replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '').slice(0, 12000);
+const topicKey = (q: string) => createHash('sha1').update(q.trim().toLowerCase()).digest('hex').slice(0, 16);
+
+const SOURCES: Array<{ key: DiscoverySource; name: string; type: string }> = [
+  { key: 'reddit', name: 'Reddit', type: 'reddit' },
+  { key: 'x', name: 'X', type: 'social' },
+  { key: 'web', name: 'Web Search', type: 'web' },
+  { key: 'github', name: 'GitHub', type: 'github' },
+  { key: 'hacker_news', name: 'Hacker News', type: 'web' },
+  { key: 'indie_hackers', name: 'Indie Hackers', type: 'web' },
+  { key: 'product_hunt', name: 'Product Hunt', type: 'web' },
+  { key: 'stackoverflow', name: 'Stack Overflow', type: 'web' },
+  { key: 'quora', name: 'Quora', type: 'web' },
+  { key: 'trustpilot', name: 'Trustpilot', type: 'web' },
+  { key: 'google_maps', name: 'Google Maps Reviews', type: 'web' },
+  { key: 'github_discussions', name: 'GitHub Discussions', type: 'web' },
+  { key: 'yc_discussions', name: 'Y Combinator Discussions', type: 'web' },
+  { key: 'google_trends', name: 'Google Trends', type: 'web' },
+];
+
+function auth(req: NextRequest) {
+  const secret = process.env.INGEST_SECRET;
+  if (secret && req.headers.get('authorization') === `Bearer ${secret}`) return Promise.resolve(true);
+  return (async () => { try { const cs = await cookies(); const s = createServerClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!, { cookies: { getAll: () => cs.getAll(), setAll: () => {} } }); return !!(await s.auth.getUser()).data.user; } catch { return false; } })();
+}
+
+function searchQuery(topic: string, source: DiscoverySource) {
+  const q = topic.replace(/["']/g, '').trim();
+  const pain = '("looking for" OR "wish there was" OR "is there a tool" OR frustrating OR frustration OR complaint OR workaround OR manual OR "doesn\'t work" OR "too expensive")';
+  switch (source) {
+    case 'github': return `"${q}" ${pain}`;
+    case 'github_discussions': return `site:github.com "${q}" (discussion OR discussions) ${pain}`;
+    case 'reddit': return `${q} ${pain}`;
+    case 'x': return `${q} ${pain} -is:retweet lang:en`;
+    case 'hacker_news': return q;
+    case 'stackoverflow': return q;
+    case 'indie_hackers': return `${q} ${pain}`;
+    case 'product_hunt': return `${q} ${pain}`;
+    case 'quora': return `${q} ${pain}`;
+    case 'trustpilot': return `${q} reviews complaints alternative`;
+    case 'google_maps': return `${q} reviews complaints customers`;
+    case 'yc_discussions': return `${q} startup founder problem discussion`;
+    case 'google_trends': return q;
+    default: return `${q} ${pain}`;
+  }
+}
+
+async function collect(source: DiscoverySource, q: string, topic: string): Promise<Signal[]> {
+  switch (source) {
+    case 'reddit': return collectReddit(q, topic);
+    case 'x': return collectX(q, topic);
+    case 'web': return collectWeb(q, topic);
+    case 'github': return collectGitHub(q, topic, false);
+    case 'github_discussions': return collectGitHub(q, topic, true);
+    case 'hacker_news': return collectHackerNews(q, topic);
+    case 'stackoverflow': return collectStackOverflow(q, topic);
+    case 'google_trends': return collectGoogleTrends(q, topic);
+    case 'indie_hackers':
+    case 'product_hunt':
+    case 'quora':
+    case 'trustpilot':
+    case 'google_maps':
+    case 'yc_discussions': return collectSite(source, q, topic);
+    default: return [];
+  }
+}
 
 export async function POST(request: NextRequest) {
-  if (!(await authorized(request))) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 }); const body = await request.json().catch(() => null); const query = String(body?.query || '').trim(); if (query.length < 3) return NextResponse.json({ error: 'query is required' }, { status: 400 }); const sources: string[] = Array.isArray(body?.sources) && body.sources.length ? body.sources : ['reddit', 'github', 'web', 'x']; const c = db(); const { data: run, error: re } = await c.from('discovery_runs').insert({ query, status: 'running', sources }).select('id').single(); if (re || !run) return NextResponse.json({ error: re?.message || 'Could not create research run' }, { status: 500 });
-  try { const jobs: Promise<any[]>[] = []; if (sources.includes('github')) for (const q of buildSearchQueries(query, 'github')) jobs.push(github(q, query)); if (sources.includes('reddit')) for (const q of buildSearchQueries(query, 'reddit')) jobs.push(reddit(q, query)); if (sources.includes('web')) for (const q of buildSearchQueries(query, 'web')) jobs.push(web(q, query)); if (sources.includes('x')) for (const q of buildSearchQueries(query, 'x')) jobs.push(xSearch(q, query)); const batches = await Promise.all(jobs); const seen = new Set<string>(); const documents = batches.flat().filter((d: any) => { const k = `${d.source}:${d.external_id}`; if (seen.has(k)) return false; seen.add(k); return true; }); let linked = 0; const tkey = topicKey(query); for (const type of ['github', 'reddit', 'web', 'x']) { const docs = documents.filter((d: any) => d.source === type); if (!docs.length) continue; const name = type === 'github' ? 'GitHub' : type === 'reddit' ? 'Reddit' : type === 'x' ? 'X' : 'Web Search'; const sourceType = type === 'x' ? 'social' : type; const src = await c.from('sources').upsert({ name, type: sourceType, enabled: true, last_collected_at: new Date().toISOString(), last_error: null }, { onConflict: 'name' }).select('id').single(); if (src.error || !src.data) throw src.error || new Error(`Could not create ${name} source`); const rows = docs.map((d: any) => ({ source_id: src.data.id, external_id: `${d.external_id}:topic:${tkey}`, url: d.url || null, title: d.title || null, content: clean(d.content || ''), published_at: d.published_at || null, metadata: { ...(d.metadata || {}), research_topic: query, topic_key: tkey, original_external_id: d.external_id, collected_at: new Date().toISOString() } })); const ins = await c.from('raw_documents').upsert(rows, { onConflict: 'source_id,external_id' }).select('id'); if (ins.error) throw ins.error; const ids = (ins.data || []).map((x: any) => x.id); if (ids.length) { const linkRes = await c.from('discovery_run_documents').upsert(ids.map((raw_document_id: string) => ({ discovery_run_id: run.id, raw_document_id })), { onConflict: 'discovery_run_id,raw_document_id', ignoreDuplicates: true }); if (linkRes.error) throw linkRes.error; linked += ids.length; } } await c.from('discovery_runs').update({ status: 'completed', signals_collected: documents.length, metadata: { linked_documents: linked, topic_key: tkey, search_queries: Object.fromEntries(['github','reddit','web','x'].map(s => [s, sources.includes(s) ? buildSearchQueries(query, s as any) : []])) }, completed_at: new Date().toISOString() }).eq('id', run.id); return NextResponse.json({ ok: true, run_id: run.id, query, sources, signals_collected: documents.length, linked, x_enabled: true }); } catch (e: any) { await c.from('discovery_runs').update({ status: 'error', error: e?.message || 'Discovery failed', completed_at: new Date().toISOString() }).eq('id', run.id); return NextResponse.json({ error: e?.message || 'Discovery failed', run_id: run.id }, { status: 500 }); }
+  if (!(await auth(request))) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  const body = await request.json().catch(() => null);
+  let query = String(body?.query || '').trim();
+  if (!query) { try { query = (await buildOpenResearchPlan())[0] || ''; } catch { query = ''; } }
+  if (query.length < 3) return NextResponse.json({ error: 'No research lens could be generated' }, { status: 400 });
+
+  const requested = Array.isArray(body?.sources) && body.sources.length ? body.sources.map(String) : SOURCES.map(s => s.key);
+  const selected = SOURCES.filter(s => requested.includes(s.key));
+  if (!selected.length) return NextResponse.json({ error: 'No valid discovery sources selected' }, { status: 400 });
+
+  const c = db();
+  const { data: run, error: runError } = await c.from('discovery_runs').insert({ query, status: 'running', sources: selected.map(s => s.key) }).select('id').single();
+  if (runError || !run) return NextResponse.json({ error: runError?.message || 'Could not create discovery run' }, { status: 500 });
+
+  const tkey = topicKey(query);
+  const results: Record<string, { collected: number; error?: string }> = {};
+  try {
+    const batches = await Promise.all(selected.map(async s => {
+      try { const docs = await collect(s.key, searchQuery(query, s.key), query); results[s.key] = { collected: docs.length }; return [s, docs] as const; }
+      catch (e: any) { results[s.key] = { collected: 0, error: e?.message || 'source failed' }; return [s, []] as const; }
+    }));
+
+    const all = batches.flatMap(([, docs]) => docs);
+    const seen = new Set<string>();
+    const documents = all.filter(d => { const k = `${d.source}:${d.external_id}`; if (seen.has(k)) return false; seen.add(k); return true; });
+    let linked = 0;
+
+    for (const [sourceConfig, docs] of batches) {
+      if (!docs.length) continue;
+      const src = await c.from('sources').upsert({ name: sourceConfig.name, type: sourceConfig.type, enabled: true, last_collected_at: new Date().toISOString(), last_error: null }, { onConflict: 'name' }).select('id').single();
+      if (src.error || !src.data) throw src.error || new Error(`Could not register ${sourceConfig.name}`);
+      const rows = docs.map(d => ({ source_id: src.data.id, external_id: `${d.external_id}:topic:${tkey}`, url: d.url || null, title: clean(d.title), content: clean(d.content), published_at: d.published_at || null, metadata: { ...(d.metadata || {}), research_topic: query, topic_key: tkey, source_key: sourceConfig.key, original_external_id: d.external_id, collected_at: new Date().toISOString() } }));
+      const ins = await c.from('raw_documents').upsert(rows, { onConflict: 'source_id,external_id' }).select('id');
+      if (ins.error) throw ins.error;
+      const ids = (ins.data || []).map((x: any) => x.id);
+      if (ids.length) {
+        const links = await c.from('discovery_run_documents').upsert(ids.map((raw_document_id: string) => ({ discovery_run_id: run.id, raw_document_id })), { onConflict: 'discovery_run_id,raw_document_id', ignoreDuplicates: true });
+        if (links.error) throw links.error;
+        linked += ids.length;
+      }
+    }
+
+    await c.from('discovery_runs').update({ status: 'completed', signals_collected: documents.length, metadata: { linked_documents: linked, topic_key: tkey, source_results: results, selected_sources: selected.map(s => s.key) }, completed_at: new Date().toISOString() }).eq('id', run.id);
+    return NextResponse.json({ ok: true, run_id: run.id, query, sources: selected.map(s => s.key), signals_collected: documents.length, linked, source_results: results, autonomous: !body?.query });
+  } catch (e: any) {
+    await c.from('discovery_runs').update({ status: 'error', error: e?.message || 'Discovery failed', metadata: { source_results: results }, completed_at: new Date().toISOString() }).eq('id', run.id);
+    return NextResponse.json({ error: e?.message || 'Discovery failed', run_id: run.id, source_results: results }, { status: 500 });
+  }
 }
