@@ -23,7 +23,7 @@ export async function POST(request: NextRequest) {
   if (!plan.length) return NextResponse.json({ error: 'No discovery lenses are available.' }, { status: 503 });
 
   const metadata = {
-    version: 9,
+    version: 10,
     autonomous: true,
     mode: 'open_mind',
     phase: 'discover',
@@ -32,7 +32,7 @@ export async function POST(request: NextRequest) {
     sources: SOURCES,
     research_queries: plan,
     analyzed_count: 0,
-    analysis_cap: 48,
+    analysis_cap: 60,
     clustered: false,
     source_progress: {},
   };
@@ -40,7 +40,7 @@ export async function POST(request: NextRequest) {
   const { data: run, error } = await c.from('agent_runs').insert({ kind: 'discovery_cycle', status: 'running', topic: missionName, metadata }).select('id').single();
   if (error || !run) return NextResponse.json({ error: error?.message || 'Could not create agent run' }, { status: 500 });
 
-  const { data: master, error: masterError } = await c.from('discovery_runs').insert({ query: missionName, status: 'running', sources: SOURCES, metadata: { autonomous_agent_run_id: run.id, version: 9, mode: 'open_mind', research_queries: plan } }).select('id').single();
+  const { data: master, error: masterError } = await c.from('discovery_runs').insert({ query: missionName, status: 'running', sources: SOURCES, metadata: { autonomous_agent_run_id: run.id, version: 10, mode: 'open_mind', research_queries: plan } }).select('id').single();
   if (masterError || !master) {
     await c.from('agent_runs').update({ status: 'error', error: masterError?.message || 'Could not create research run', completed_at: new Date().toISOString() }).eq('id', run.id);
     return NextResponse.json({ error: masterError?.message || 'Could not create research run' }, { status: 500 });
