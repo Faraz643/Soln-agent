@@ -23,15 +23,47 @@ async function json(url: string, headers: Record<string, string> = {}) {
   return r.json().catch(() => null);
 }
 
+function unwrapSearchUrl(value: string) {
+  try {
+    const raw = value.startsWith('//') ? `https:${value}` : value;
+    const u = new URL(raw);
+    const redirected = u.searchParams.get('uddg');
+    return redirected ? decodeURIComponent(redirected) : raw;
+  } catch { return value; }
+}
+
 async function ddg(q: string, source: DiscoverySource, researchQuery: string, limit = 15): Promise<Signal[]> {
   const r = await fetch(`https://html.duckduckgo.com/html/?q=${encodeURIComponent(q)}`, { headers: { 'User-Agent': 'Mozilla/5.0 Soln-Agent' }, cache: 'no-store' });
   if (!r.ok) return [];
-  const html = await r.text(); const out: Signal[] = [];
-  const re = /<a[^>]+class="result__a"[^>]+href="([^"]+)"[^>]*>(.*?)<\/a>[\s\S]*?<a[^>]+class="result__snippet"[^>]*>(.*?)<\/a>/g;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(html)) && out.length < limit) {
-    const url = strip(m[1]);
-    out.push({ source, external_id: url, url, title: strip(m[2]), content: strip(m[3]), published_at: null, metadata: { research_query: researchQuery, collection_method: 'public-web-search', source_query: q } });
+  const html = await r.text();
+  const out: Signal[] = [];
+  // DDG has changed the result snippet markup over time. Parse result anchors first,
+  // then take the nearest snippet text rather than depending on one exact tag shape.
+  const resultRe = /<div[^>]*class="[^"]*result[^\"]*"[^>]*>([\s\S]*?)<\/div>\s*<\/div>/gi;
+  const blocks: string[] = [];
+  let block: RegExpExecArray | null;
+  while ((block = resultRe.exec(html)) && blocks.length < limit * 2) blocks.push(block[1]);
+  const anchorRe = /<a[^>]+class="[^"]*result__a[^"]*"[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/i;
+  const snippetRe = /(?:class="[^"]*result__snippet[^"]*"[^>]*>|class='[^']*result__snippet[^']*'[^>]*>)([\s\S]*?)(?:<\/a>|<\/div>|<\/span>)/i;
+  for (const candidate of blocks) {
+    const a = candidate.match(anchorRe);
+    if (!a) continue;
+    const url = unwrapSearchUrl(strip(a[1]));
+    if (!url || out.some(x => x.url === url)) continue;
+    const sn = candidate.match(snippetRe);
+    const title = strip(a[2]);
+    const snippet = sn ? strip(sn[1]) : strip(candidate.replace(a[0], '')).slice(0, 1000);
+    out.push({ source, external_id: url, url, title, content: clean(`${title}\n\n${snippet}`), published_at: null, metadata: { research_query: researchQuery, collection_method: 'public-web-search', source_query: q } });
+    if (out.length >= limit) break;
+  }
+  // Fallback parser for compact/changed DDG markup.
+  if (!out.length) {
+    const links = [...html.matchAll(/<a[^>]+class="[^"]*result__a[^"]*"[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi)];
+    for (const m of links.slice(0, limit)) {
+      const url = unwrapSearchUrl(strip(m[1]));
+      if (!url || out.some(x => x.url === url)) continue;
+      out.push({ source, external_id: url, url, title: strip(m[2]), content: strip(m[2]), published_at: null, metadata: { research_query: researchQuery, collection_method: 'public-web-search-fallback', source_query: q } });
+    }
   }
   return out;
 }
@@ -47,7 +79,7 @@ export async function collectX(q: string, researchQuery: string): Promise<Signal
     const j = await json(`https://api.x.com/2/tweets/search/recent?query=${encodeURIComponent(q)}&max_results=25&tweet.fields=created_at,public_metrics,author_id&expansions=author_id&user.fields=username,name`, { Authorization: `Bearer ${token}` });
     if (j?.data) { const users = new Map((j.includes?.users || []).map((u: any) => [u.id, u])); return j.data.map((t: any) => { const u: any = users.get(t.author_id); return { source: 'x', external_id: String(t.id), url: `https://x.com/${u?.username || 'i'}/status/${t.id}`, title: u?.name ? `@${u.username} — ${u.name}` : 'X post', content: clean(t.text), published_at: t.created_at || null, metadata: { username: u?.username, likes: t.public_metrics?.like_count || 0, replies: t.public_metrics?.reply_count || 0, reposts: t.public_metrics?.retweet_count || 0, research_query: researchQuery, collection_method: 'x-api' } }; }); }
   }
-  return ddg(`site:x.com ${q}`, 'x', researchQuery, 12);
+  return ddg(`site:x.com ${q}`, 'x', researchQuery, 15);
 }
 
 export async function collectGitHub(q: string, researchQuery: string, discussions = false): Promise<Signal[]> {
