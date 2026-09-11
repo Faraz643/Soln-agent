@@ -1,15 +1,15 @@
 import Link from 'next/link';
 
 export function AppShell({ active, children }: { active: string; children: React.ReactNode }) {
-  const links = [['Overview','/'],['Opportunities','/opportunities'],['Problems','/problems'],['Trends','/trends'],['Sources','/sources'],['Settings','/settings']];
+  const links = [['Overview','/'],['Opportunities','/opportunities']];
   return <div className="app-shell">
     <aside className="sidebar">
       <Link href="/" className="brand">Soln<span>·</span>Agent</Link>
-      <div className="brand-sub">Product Demand Intelligence</div>
+      <div className="brand-sub">Open-mind product discovery</div>
       <nav className="nav">{links.map(([label, href]) => <Link key={href} className={active === label ? 'active' : ''} href={href}>{label}</Link>)}</nav>
       <div className="sidebar-foot"><span className="status-dot"/> Intelligence engine online</div>
     </aside>
-    <main className="main"><header className="header"><strong>{active}</strong><span className="badge">Demand Intelligence</span></header>{children}</main>
+    <main className="main"><header className="header"><strong>{active}</strong><span className="badge">Open-mind discovery</span></header>{children}</main>
   </div>;
 }
 
