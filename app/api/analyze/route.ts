@@ -34,13 +34,8 @@ async function callGemini(input: { research_topic: string; title: string; conten
   const model = process.env.GEMINI_MODEL || 'gemini-3.1-flash-lite';
   const payload = JSON.stringify(input).slice(0, 30000);
   const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(key)}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      system_instruction: { parts: [{ text: DEMAND_SYSTEM_PROMPT }] },
-      contents: [{ role: 'user', parts: [{ text: payload }] }],
-      generationConfig: { temperature: 0, responseMimeType: 'application/json' },
-    }),
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ system_instruction: { parts: [{ text: DEMAND_SYSTEM_PROMPT }] }, contents: [{ role: 'user', parts: [{ text: payload }] }], generationConfig: { temperature: 0, responseMimeType: 'application/json' } }),
   });
   if (!res.ok) { const detail = await res.text().catch(() => ''); throw new Error(`Gemini API returned ${res.status}${detail ? `: ${detail.slice(0, 300)}` : ''}`); }
   const data = await res.json();
@@ -49,12 +44,15 @@ async function callGemini(input: { research_topic: string; title: string; conten
   return { data: JSON.parse(text), model };
 }
 
-async function analyzeOne(doc: any, c: ReturnType<typeof db>, researchTopic: string | null) {
+async function analyzeOne(doc: any, c: ReturnType<typeof db>, fallbackTopic: string | null) {
   try {
     const source = String(doc.sources?.type || 'other');
     const meta = json(doc.metadata);
-    const topic = researchTopic || String(meta.research_topic || meta.query || '').trim();
-    if (!topic) throw new Error('Research topic is missing for this analysis');
+    // A multi-lens run must analyze a document against the lens that produced it,
+    // not against the umbrella mission name. This prevents valid evidence from being
+    // rejected merely because the run itself is called "Open-mind discovery".
+    const topic = String(meta.research_topic || meta.query || fallbackTopic || '').trim();
+    if (!topic || topic === 'Open-mind discovery') throw new Error('Research lens is missing for this signal');
     const gh = source === 'github' ? await githubState(doc.url) : { isOpen: null, hasPr: false, isSolved: false, reason: null };
     const stale = !!doc.published_at && Date.now() - new Date(doc.published_at).getTime() > 180 * 86400000;
     const { data: aiRaw, model } = await callGemini({ research_topic: topic, title: doc.title || '', content: doc.content || '', source, metadata: meta, lifecycle: gh });
@@ -71,7 +69,7 @@ async function analyzeOne(doc: any, c: ReturnType<typeof db>, researchTopic: str
       is_stale: stale, difficulty: ai.difficulty, technologies: ai.technologies,
       problem_summary: topicRejected ? null : (ai.problem_summary || null), opportunity_summary: topicRejected ? null : (ai.opportunity_summary || null),
       opportunity_score: topicRejected ? 0 : ai.opportunity_score, confidence_score: ai.confidence_score,
-      rejection_reason: topicRejected ? `Document is not sufficiently relevant to the research topic (${ai.topic_relevance_score}/100): ${ai.topic_relevance_reason || 'content does not materially match the topic'}` : status === 'rejected' ? (ai.rejection_reason || 'Not a meaningful problem signal') : null,
+      rejection_reason: topicRejected ? `Document is not sufficiently relevant to its discovery lens (${ai.topic_relevance_score}/100): ${ai.topic_relevance_reason || 'content does not materially match the lens'}` : status === 'rejected' ? (ai.rejection_reason || 'Not a meaningful problem signal') : null,
       evidence: { source, research_topic: topic, metadata: meta, lifecycle: gh, topic_relevance: { score: ai.topic_relevance_score, reason: ai.topic_relevance_reason }, model_scores: { pain: ai.pain_score, demand: ai.demand_score, payment: ai.payment_score, evidence_quality: ai.evidence_quality, urgency: ai.urgency_score, competition: ai.competition_score, workaround: ai.workaround_score }, customer_segments: ai.customer_segments, ai_evidence: ai.evidence },
       model, analyzed_at: new Date().toISOString(), updated_at: new Date().toISOString(),
       pain_score: ai.pain_score, demand_score: ai.demand_score, payment_score: ai.payment_score, evidence_quality: ai.evidence_quality, urgency_score: ai.urgency_score, competition_score: ai.competition_score, workaround_score: ai.workaround_score, customer_segments: ai.customer_segments,
