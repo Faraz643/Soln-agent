@@ -47,11 +47,11 @@ export async function collectX(q: string, researchQuery: string): Promise<Signal
     const j = await json(`https://api.x.com/2/tweets/search/recent?query=${encodeURIComponent(q)}&max_results=25&tweet.fields=created_at,public_metrics,author_id&expansions=author_id&user.fields=username,name`, { Authorization: `Bearer ${token}` });
     if (j?.data) { const users = new Map((j.includes?.users || []).map((u: any) => [u.id, u])); return j.data.map((t: any) => { const u: any = users.get(t.author_id); return { source: 'x', external_id: String(t.id), url: `https://x.com/${u?.username || 'i'}/status/${t.id}`, title: u?.name ? `@${u.username} — ${u.name}` : 'X post', content: clean(t.text), published_at: t.created_at || null, metadata: { username: u?.username, likes: t.public_metrics?.like_count || 0, replies: t.public_metrics?.reply_count || 0, reposts: t.public_metrics?.retweet_count || 0, research_query: researchQuery, collection_method: 'x-api' } }; }); }
   }
-  return dd(`site:x.com ${q}`, 'x', researchQuery, 12);
+  return ddg(`site:x.com ${q}`, 'x', researchQuery, 12);
 }
 
 export async function collectGitHub(q: string, researchQuery: string, discussions = false): Promise<Signal[]> {
-  if (discussions) return dd(`site:github.com ${q} (discussion OR discussions)`, 'github_discussions', researchQuery, 15);
+  if (discussions) return ddg(`site:github.com ${q} (discussion OR discussions)`, 'github_discussions', researchQuery, 15);
   const j = await json(`https://api.github.com/search/issues?q=${encodeURIComponent(`${q} is:issue is:open`)}&sort=updated&order=desc&per_page=25`, { Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' });
   return (j?.items || []).map((i: any) => ({ source: 'github', external_id: String(i.id), url: i.html_url, title: clean(i.title), content: clean(i.body || ''), published_at: i.created_at || null, metadata: { repository: i.repository_url, labels: (i.labels || []).map((x: any) => x.name), comments: i.comments, reactions: i.reactions?.total_count || 0, author: i.user?.login, research_query: researchQuery, collection_method: 'github-api', updated_at: i.updated_at } }));
 }
@@ -73,15 +73,14 @@ const SITE_SOURCES: Array<[DiscoverySource, string]> = [
 
 export async function collectSite(source: DiscoverySource, q: string, researchQuery: string): Promise<Signal[]> {
   const domain = SITE_SOURCES.find(([s]) => s === source)?.[1];
-  return dd(`site:${domain || source} ${q}`, source, researchQuery, 15);
+  return ddg(`site:${domain || source} ${q}`, source, researchQuery, 15);
 }
 
 export async function collectWeb(q: string, researchQuery: string): Promise<Signal[]> {
-  return dd(q, 'web', researchQuery, 20);
+  return ddg(q, 'web', researchQuery, 20);
 }
 
 export async function collectGoogleTrends(q: string, researchQuery: string): Promise<Signal[]> {
-  // Google Trends has no generally available public query API. Keep the signal auditable by storing the official Trends query page and use it as validation evidence.
   const url = `https://trends.google.com/trends/explore?q=${encodeURIComponent(q)}`;
   return [{ source: 'google_trends', external_id: url, url, title: `Google Trends: ${q}`, content: `Trend validation page for ${q}. Open the source to inspect search-interest trajectory and related queries.`, published_at: null, metadata: { research_query: researchQuery, collection_method: 'google-trends-public-page', validation_only: true } }];
 }
